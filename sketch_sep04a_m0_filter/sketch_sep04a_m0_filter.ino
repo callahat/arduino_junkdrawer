@@ -68,6 +68,8 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 #define VERSION "1.2"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
+#define PLOTTER 1
+//#define MONITOR 1
 //#define DEBUG 1
 
 #include <Adafruit_DotStar.h>
@@ -109,15 +111,15 @@ volatile int32_t *fir = fir1;
 
 // Main working variables, current sample and current output
 volatile uint32_t s, o;
-
+/*
 // Gain
 volatile uint32_t gain = 0;
 
 // Potentiometer sampling
 volatile uint32_t p_gain = 0, p_f1 = 0, p_f2 = 0;
-
+*/
 // Wait loop counters for ADC
-volatile uint32_t cnt, cnt2;
+volatile uint32_t cnt; // , cnt2;
 
 // Signal level overdrive detection
 volatile uint32_t output_error_ticks = 65000;
@@ -305,10 +307,11 @@ void setup() {
 
   // Dummy reads and writes to get all pin muxes and modes correctly set (by the Arduino libraries)
   analogRead(A1);         // A1 / Pin 2 / PA09 as analog input of signal
-  analogRead(A2);         // A2 / Pin 0 / PA08 analog input, potentiometer 1, Frequency 2, top frequency
-  analogRead(A3);         // A3 / Pin 3 / PA07 analog input, potentiometer 2, Gain (Volume)
-  analogRead(A4);         // A4 / Pin 4 / PA06 analog input, potentiometer 3, Frequency 1, bottom frequency
-  analogWrite(A0, 512);   // A0 / Pin 1 / PA02 as analog output of signal
+  // Not using POTs, or analog output. Planning to convert output to drive a strip of addressable LEDs
+  //analogRead(A2);         // A2 / Pin 0 / PA08 analog input, potentiometer 1, Frequency 2, top frequency
+  //analogRead(A3);         // A3 / Pin 3 / PA07 analog input, potentiometer 2, Gain (Volume)
+  //analogRead(A4);         // A4 / Pin 4 / PA06 analog input, potentiometer 3, Frequency 1, bottom frequency
+  //analogWrite(A0, 512);   // A0 / Pin 1 / PA02 as analog output of signal
 
   // Switch off pin 13 LED
   pinMode(13, OUTPUT);
@@ -440,6 +443,8 @@ void sample_event()
   s = ADC->RESULT.reg;
   ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;  // Clear the Data Ready flag
 
+  // Not using potentiometers
+  /*
   // We also want to sample a potentiometer.
   // Alternate between A2, A3 and A4
   int p_pin;
@@ -455,6 +460,7 @@ void sample_event()
   // Prepare the input MUX
   ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[p_pin].ulADCChannelNumber;
   ADC_SYNC();
+  */
 
   // Start ADC conversion, it will run in the background
   ADC->SWTRIG.bit.START = 1;
@@ -473,7 +479,8 @@ void sample_event()
   // safely multiply and stay inside 32 bits (31 signed bits)
   acc >>= 6;
 
-  acc *= gain;
+  // hardcode a gain since not using POT
+  acc *= 100;
 
   // We have 4 bits to go to compensate for the gain, and 16 bit shift for the FIR table multiplier.
   // But we want the gain to actually be able to amplify. If we skip shifting 5 steps, the max
@@ -516,6 +523,8 @@ void sample_event()
   if(next_idx >= FIR_LEN)
     next_idx = 0;
 
+  // Again, not using the POTs
+  /*
   // Follow up on potentiometer ADC conversion
   cnt2 = 0;
   while (ADC->INTFLAG.bit.RESRDY == 0) cnt2++;   // Waiting for conversion to complete
@@ -533,7 +542,9 @@ void sample_event()
       p_f2 = p;               // f2
       p_sel = 0;
   }
+  */
 
+  // The preset should be overkill as we don't change it. probably can comment it out.
   // Pre-set MUX to A1 so that we can start sampling immediately at next interrupt
   ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[A1].ulADCChannelNumber;
   ADC_SYNC();
@@ -552,16 +563,20 @@ void loop() {
   unsigned long loop_start_timer = micros();
   static unsigned long output_last_timer = 0;
 
+  /*
   // Potientiometer input is filtered to remove noise.
   // Accumulation buffers:
   static float g_acc = 0.0f, f1_acc = 0.0f, f2_acc = 0.0f;
 
   // Translate frequency potentiometer input to frequencies
   // Lower frequency f1 range 50-1000 Hz
-  float f1_in = 50.0f + 950.0f * (float)p_f1 / 1024.0f;
-  f1_acc = 0.8f * f1_acc + 0.2f * f1_in;
-  float f1 = f1_acc;
+  //float f1_in = 50.0f + 950.0f * (float)p_f1 / 1024.0f;
+  //f1_acc = 0.8f * f1_acc + 0.2f * f1_in;
+  //float f1 = f1_acc;
+  */
+  float f1 = 50; // 50Hz
 
+  /*
   // Upper frequency f2 range split in two halves 400-1000Hz and 1000-4000Hz
   float f2_in = (float)p_f2 / 1024.0f;
   if(f2_in < 0.5f) {
@@ -571,7 +586,10 @@ void loop() {
   }
   f2_acc = 0.8f * f2_acc + 0.2f * f2_in;
   float f2 = f2_acc;
+  */
+  float f2 = 1000; // 1000Hz
 
+  /*
   // Special CW mode if f2 < 1000
   if(f2 < 1000.0f) {
     // f2 is below 1000 Hz, fixed 100Hz bandwidth for CW
@@ -589,7 +607,10 @@ void loop() {
     // Lowpass mode
     gain = (uint32_t)g_acc;
   }
+  */
 
+  // Since the POTs are not being used, this will not change and should be handled in the setup. Probably
+  // also don't need the double FIP tap buffer
   // Get the FIR tap buffer not currently in use
   int32_t *new_fir = (fir == fir1) ? fir2 : fir1;
 
@@ -623,19 +644,30 @@ void loop() {
   // More timing
   unsigned long loop_end_timer = micros();
 
+  #ifdef PLOTTER
+  Serial.print(o+256);
+  Serial.print("\t");
+  Serial.print(s);
+  Serial.print("\t0\t1000");
+  Serial.print("\n");
+  #endif
+    
   // Only print on virtual serial port every 0.5s
   if(loop_start_timer > output_last_timer + 500000 ||
      loop_start_timer < output_last_timer) {
 
     output_last_timer = loop_start_timer;
 
+    #ifdef MONITOR
     Serial.print("m0_filter v" VERSION ": gain=");
-    Serial.print(g_acc/32.0f);
+    Serial.print("n/a");
+    //Serial.print(g_acc/32.0f);
     Serial.print(", f1=");
     Serial.print(f1);
     Serial.print(", f2=");
     Serial.print(f2);
     Serial.print("\n");
+    #endif
 
     #ifdef DEBUG
     Serial.print("Interrupt separation time: ");
@@ -644,13 +676,17 @@ void loop() {
     Serial.print(interrupt_timing);
     Serial.print(" us,  ADC wait count 1: ");
     Serial.print(cnt);
-    Serial.print(",  count 2: ");
-    Serial.print(cnt2);
+    //Serial.print(",  count 2: ");
+    //Serial.print(cnt2);
     Serial.print("\n");
 
     Serial.print("Sample: ");
     Serial.print(s);
     Serial.print("\n");
+    Serial.print("Output: ");
+    Serial.print(o);
+    Serial.print("\n");
+    /*
     Serial.print("Potentiometers: Gain: ");
     Serial.print(p_gain);
     Serial.print(",  f1: ");
@@ -658,6 +694,7 @@ void loop() {
     Serial.print(",  f2: ");
     Serial.print(p_f2);
     Serial.print("\n");
+    */
 
     Serial.print("Calc. time: ");
     Serial.print(loop_end_timer - loop_start_timer);
