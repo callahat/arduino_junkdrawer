@@ -69,8 +69,8 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 
 // Uncomment to enable additional debug output on the virtual USB serial port
 #define PLOTTER 1
-//#define MONITOR 1
-//#define DEBUG 1
+// #define MONITOR 1
+// #define DEBUG 1
 
 #include <Adafruit_DotStar.h>
 // Init DotStar module
@@ -99,7 +99,8 @@ int32_t samples[FIR_LEN*2];
 int next_idx;
 
 // Double-buffered FIR tap arrays
-int32_t fir1[FIR_LEN_TABLE], fir2[FIR_LEN_TABLE];
+int32_t fir1a[FIR_LEN_TABLE], fir2a[FIR_LEN_TABLE];
+int32_t fir1b[FIR_LEN_TABLE], fir2b[FIR_LEN_TABLE];
 
 // Communication between the timer loop and the background loop is done
 // through global data, and these are defined as volatile to avoid
@@ -107,10 +108,11 @@ int32_t fir1[FIR_LEN_TABLE], fir2[FIR_LEN_TABLE];
 
 // The current live buffer. Reads and writes to a volatile pointer are
 // assumed to be atomic!
-volatile int32_t *fir = fir1;
+volatile int32_t *fira = fir1a;
+volatile int32_t *firb = fir1b;
 
 // Main working variables, current sample and current output
-volatile uint32_t s, o;
+volatile uint32_t s, oa, ob;
 /*
 // Gain
 volatile uint32_t gain = 0;
@@ -290,15 +292,18 @@ void setup() {
   for(int i=0; i<FIR_LEN; i++) {
     samples[i] = 0;
     samples[i+FIR_LEN] = 0;
-    fir1[i] = 0;
-    fir2[i] = 0;
+    fir1a[i] = 0;
+    fir2a[i] = 0;
+    fir1b[i] = 0;
+    fir2b[i] = 0;
   }
   // Prepare lookup tables
   prepare_hamming();
   prepare_sinus();
 
   // Set up an initial FIR filter that blocks everything
-  prepare_fir(fir1, 0.0f, 0.0f);
+  prepare_fir(fir1a, 0.0f, 0.0f);
+  prepare_fir(fir1b, 0.0f, 0.0f);
   next_idx = 0;
 
   // We use 10 bits for the DAC and ADC hardware
@@ -413,7 +418,7 @@ void sample_event()
   ADC->SWTRIG.bit.START = 1;
 
   // Set the DAC output value calculated during the last interrupt.
-  DAC->DATA.reg = o;
+  // DAC->DATA.reg = o;
 
   // Do FIR filtering calculations. This is split in to two parts.
 
@@ -427,12 +432,14 @@ void sample_event()
   // interrupt service routine. Thus no risk of it being modified.
 
   // This is the first half of FIR filtering:
-  int32_t acc = 0;
+  int32_t acca = 0;
+  int32_t accb = 0;
   int i=0, n=next_idx, n2=next_idx+FIR_LEN-1;
   for(; i<(FIR_LEN>>2); i++, n++, n2--) {
     // Convolution. Multiply and accumulate. Take advantage
     // of the symmetry to do two values at the same time.
-    acc += (samples[n] + samples[n2]) * fir[i];
+    acca += (samples[n] + samples[n2]) * fira[i];
+    accb += (samples[n] + samples[n2]) * firb[i];
   }
 
   // The ADC should have had time to finish now. Do the follow up
@@ -467,52 +474,67 @@ void sample_event()
 
   // Do more FIR filtering. The second half
   for(; i<(FIR_LEN>>1); i++, n++, n2--) {
-    acc += (samples[n] + samples[n2]) * fir[i];
+    acca += (samples[n] + samples[n2]) * fira[i];
+    accb += (samples[n] + samples[n2]) * firb[i];
   }
 
   // The center tap is separately handled
-  acc += samples[n] * fir[i];
+  acca += samples[n] * fira[i];
+  accb += samples[n] * firb[i];
 
   // acc has a theoretical maximum value FIR_LEN * 512 * 65536, or 2^8 * 2^9 * 2^16 = 2^33
   // but due to the FIR buffer properties, the maximum should become around 2 * 512 * 65536 = 2^26
   // The gain is up to 2^10, so if the sum is shifted 6 steps giving maximum 2^20 we can
   // safely multiply and stay inside 32 bits (31 signed bits)
-  acc >>= 6;
+  acca >>= 6;
+  accb >>= 6;
 
   // hardcode a gain since not using POT
-  acc *= 100;
+  acca *= 100;
+  accb *= 100;
 
   // We have 4 bits to go to compensate for the gain, and 16 bit shift for the FIR table multiplier.
   // But we want the gain to actually be able to amplify. If we skip shifting 5 steps, the max
   // reading on the gain potentiometer results in 32 times volume.
-  int32_t o2 = acc >> (4 + 16 - 5);
+  int32_t o2a = acca >> (4 + 16 - 5);
+  int32_t o2b = accb >> (4 + 16 - 5);
 
   // Clamping of the output
-  if(o2 < -511) {
-    o = 0;
-  } else if(o2 > 511) {
-    o = 1023;
+  if(o2a < -511) {
+    oa = 0;
+  } else if(o2a > 511) {
+    oa = 1023;
   } else {
-    o = o2 + 512;
+    oa = o2a + 512;
+  }
+  if(o2b < -511) {
+    ob = 0;
+  } else if(o2b > 511) {
+    ob = 1023;
+  } else {
+    ob = o2b + 512;
   }
   // The DAC will be updated at the start of the next interrupt to minimize jitter
 
   // Detect if we are near to clipping/overdrive
   // The tick counters shows how long time ago we last had problems
-  if(o > OUTPUT_ERROR_LEVEL_HIGH || o < OUTPUT_ERROR_LEVEL_LOW) {
+  if(oa > OUTPUT_ERROR_LEVEL_HIGH || oa < OUTPUT_ERROR_LEVEL_LOW ||
+     ob > OUTPUT_ERROR_LEVEL_HIGH || ob < OUTPUT_ERROR_LEVEL_LOW) {
     output_error_ticks = 0;
   } else {
     output_error_ticks++;
     if(output_error_ticks > 65000)
       output_error_ticks = 65000;
   }
-  if(o > OUTPUT_WARNING_LEVEL_HIGH || o < OUTPUT_WARNING_LEVEL_LOW) {
+  if(oa > OUTPUT_WARNING_LEVEL_HIGH || oa < OUTPUT_WARNING_LEVEL_LOW ||
+     ob > OUTPUT_WARNING_LEVEL_HIGH || ob < OUTPUT_WARNING_LEVEL_LOW) {
     output_warning_ticks = 0;
   } else {
     output_warning_ticks++;
     if(output_warning_ticks > 65000)
       output_warning_ticks = 65000;
   }
+
 
   // Store the new input sample in the buffers
   // (must be done after the whole FIR is calculated)
@@ -588,6 +610,7 @@ void loop() {
   float f2 = f2_acc;
   */
   float f2 = 1000; // 1000Hz
+  float f3 = 3000; // 3000Hz
 
   /*
   // Special CW mode if f2 < 1000
@@ -612,13 +635,16 @@ void loop() {
   // Since the POTs are not being used, this will not change and should be handled in the setup. Probably
   // also don't need the double FIP tap buffer
   // Get the FIR tap buffer not currently in use
-  int32_t *new_fir = (fir == fir1) ? fir2 : fir1;
+  int32_t *new_fira = (fira == fir1a) ? fir2a : fir1a;
+  int32_t *new_firb = (firb == fir1b) ? fir2b : fir1b;
 
   // Run the generation and store in the spare buffer
-  prepare_fir(new_fir, f1, f2);
+  prepare_fir(new_fira, f1, f2);
+  prepare_fir(new_firb, f2, f3);
 
   // Make the new filter live. 32 bit volatile pointer writes and reads are assumed to be atomic!
-  fir = new_fir;
+  fira = new_fira;
+  firb = new_firb;
 
   // Update DotStar RGB LED. The LED is used to show if we are
   // getting near saturation/clipping. Enabling the DotStar
@@ -645,10 +671,12 @@ void loop() {
   unsigned long loop_end_timer = micros();
 
   #ifdef PLOTTER
-  Serial.print(o+256);
+  Serial.print(ob+256);
+  Serial.print("\t");
+  Serial.print(oa+128);
   Serial.print("\t");
   Serial.print(s);
-  Serial.print("\t0\t1000");
+  Serial.print("\t256\t1000");
   Serial.print("\n");
   #endif
     
@@ -683,8 +711,11 @@ void loop() {
     Serial.print("Sample: ");
     Serial.print(s);
     Serial.print("\n");
-    Serial.print("Output: ");
-    Serial.print(o);
+    Serial.print("OutputA: ");
+    Serial.print(oa);
+    Serial.print("\n");
+    Serial.print("Outputb: ");
+    Serial.print(ob);
     Serial.print("\n");
     /*
     Serial.print("Potentiometers: Gain: ");
@@ -700,11 +731,20 @@ void loop() {
     Serial.print(loop_end_timer - loop_start_timer);
     Serial.print(" us\n");
 
-    Serial.print("FIR taps:\n[");
+    Serial.print("FIRA taps:\n[");
     for(int i=0; i<FIR_LEN_TABLE; i++) {
       if(i%15 == 14)
         Serial.print("\n");
-      Serial.print(fir[i]);
+      Serial.print(fira[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+    
+    Serial.print("FIRB taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(firb[i]);
       Serial.print(", ");
     }
     Serial.print("]\n");
