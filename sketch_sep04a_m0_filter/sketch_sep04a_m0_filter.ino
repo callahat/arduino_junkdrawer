@@ -102,7 +102,7 @@ int next_idx;
 // int32_t fir1a[FIR_LEN_TABLE], fir2a[FIR_LEN_TABLE];
 // int32_t fir1b[FIR_LEN_TABLE], fir2b[FIR_LEN_TABLE];
 // Single buffering since they are calculate at startup
-int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE];
+int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE], fir1c[FIR_LEN_TABLE], fir1d[FIR_LEN_TABLE];
 
 // Communication between the timer loop and the background loop is done
 // through global data, and these are defined as volatile to avoid
@@ -112,9 +112,11 @@ int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE];
 // assumed to be atomic!
 volatile int32_t *fira = fir1a;
 volatile int32_t *firb = fir1b;
+volatile int32_t *firc = fir1c;
+volatile int32_t *fird = fir1d;
 
 // Main working variables, current sample and current output
-volatile uint32_t s, oa, ob;
+volatile uint32_t s, oa, ob, oc, od;
 /*
 // Gain
 volatile uint32_t gain = 0;
@@ -298,6 +300,8 @@ void setup() {
     //fir2a[i] = 0;
     fir1b[i] = 0;
     //fir2b[i] = 0;
+    fir1c[i] = 0;
+    fir1d[i] = 0;
   }
   // Prepare lookup tables
   prepare_hamming();
@@ -311,8 +315,12 @@ void setup() {
   float f1 = 50; // 50Hz
   float f2 = 1000; // 1000Hz
   float f3 = 3000; // 3000Hz
+  float f4 = 6000; // 6000Hz
+  float f5 = 10000; // 10000Hz
   prepare_fir(fir1a, f1, f2);
   prepare_fir(fir1b, f2, f3);
+  prepare_fir(fir1c, f3, f4);
+  prepare_fir(fir1d, f4, f5);
   next_idx = 0;
 
   // We use 10 bits for the DAC and ADC hardware
@@ -443,12 +451,16 @@ void sample_event()
   // This is the first half of FIR filtering:
   int32_t acca = 0;
   int32_t accb = 0;
+  int32_t accc = 0;
+  int32_t accd = 0;
   int i=0, n=next_idx, n2=next_idx+FIR_LEN-1;
   for(; i<(FIR_LEN>>2); i++, n++, n2--) {
     // Convolution. Multiply and accumulate. Take advantage
     // of the symmetry to do two values at the same time.
     acca += (samples[n] + samples[n2]) * fira[i];
     accb += (samples[n] + samples[n2]) * firb[i];
+    accc += (samples[n] + samples[n2]) * firc[i];
+    accd += (samples[n] + samples[n2]) * fird[i];
   }
 
   // The ADC should have had time to finish now. Do the follow up
@@ -485,11 +497,15 @@ void sample_event()
   for(; i<(FIR_LEN>>1); i++, n++, n2--) {
     acca += (samples[n] + samples[n2]) * fira[i];
     accb += (samples[n] + samples[n2]) * firb[i];
+    accc += (samples[n] + samples[n2]) * firc[i];
+    accd += (samples[n] + samples[n2]) * fird[i];
   }
 
   // The center tap is separately handled
   acca += samples[n] * fira[i];
   accb += samples[n] * firb[i];
+  accc += samples[n] * firc[i];
+  accd += samples[n] * fird[i];
 
   // acc has a theoretical maximum value FIR_LEN * 512 * 65536, or 2^8 * 2^9 * 2^16 = 2^33
   // but due to the FIR buffer properties, the maximum should become around 2 * 512 * 65536 = 2^26
@@ -497,16 +513,22 @@ void sample_event()
   // safely multiply and stay inside 32 bits (31 signed bits)
   acca >>= 6;
   accb >>= 6;
+  accc >>= 6;
+  accd >>= 6;
 
   // hardcode a gain since not using POT
   acca *= 100;
   accb *= 100;
+  accc *= 100;
+  accd *= 100;
 
   // We have 4 bits to go to compensate for the gain, and 16 bit shift for the FIR table multiplier.
   // But we want the gain to actually be able to amplify. If we skip shifting 5 steps, the max
   // reading on the gain potentiometer results in 32 times volume.
   int32_t o2a = acca >> (4 + 16 - 5);
   int32_t o2b = accb >> (4 + 16 - 5);
+  int32_t o2c = accc >> (4 + 16 - 5);
+  int32_t o2d = accd >> (4 + 16 - 5);
 
   // Clamping of the output
   if(o2a < -511) {
@@ -523,12 +545,29 @@ void sample_event()
   } else {
     ob = o2b + 512;
   }
+  if(o2c < -511) {
+    oc = 0;
+  } else if(o2c > 511) {
+    oc = 1023;
+  } else {
+    oc = o2c + 512;
+  }
+  if(o2d < -511) {
+    od = 0;
+  } else if(o2d > 511) {
+    od = 1023;
+  } else {
+    od = o2d + 512;
+  }
   // The DAC will be updated at the start of the next interrupt to minimize jitter
 
   // Detect if we are near to clipping/overdrive
   // The tick counters shows how long time ago we last had problems
   if(oa > OUTPUT_ERROR_LEVEL_HIGH || oa < OUTPUT_ERROR_LEVEL_LOW ||
-     ob > OUTPUT_ERROR_LEVEL_HIGH || ob < OUTPUT_ERROR_LEVEL_LOW) {
+     ob > OUTPUT_ERROR_LEVEL_HIGH || ob < OUTPUT_ERROR_LEVEL_LOW ||
+     oc > OUTPUT_ERROR_LEVEL_HIGH || oc < OUTPUT_ERROR_LEVEL_LOW ||
+     od > OUTPUT_ERROR_LEVEL_HIGH || od < OUTPUT_ERROR_LEVEL_LOW
+     ) {
     output_error_ticks = 0;
   } else {
     output_error_ticks++;
@@ -536,7 +575,10 @@ void sample_event()
       output_error_ticks = 65000;
   }
   if(oa > OUTPUT_WARNING_LEVEL_HIGH || oa < OUTPUT_WARNING_LEVEL_LOW ||
-     ob > OUTPUT_WARNING_LEVEL_HIGH || ob < OUTPUT_WARNING_LEVEL_LOW) {
+     ob > OUTPUT_WARNING_LEVEL_HIGH || ob < OUTPUT_WARNING_LEVEL_LOW ||
+     oc > OUTPUT_WARNING_LEVEL_HIGH || oc < OUTPUT_WARNING_LEVEL_LOW ||
+     od > OUTPUT_WARNING_LEVEL_HIGH || od < OUTPUT_WARNING_LEVEL_LOW
+     ) {
     output_warning_ticks = 0;
   } else {
     output_warning_ticks++;
@@ -677,12 +719,16 @@ void loop() {
   unsigned long loop_end_timer = micros();
 
   #ifdef PLOTTER
+  Serial.print(od+512);
+  Serial.print("\t");
+  Serial.print(oc+384);
+  Serial.print("\t");
   Serial.print(ob+256);
   Serial.print("\t");
   Serial.print(oa+128);
   Serial.print("\t");
   Serial.print(s);
-  Serial.print("\t256\t1000");
+  Serial.print("\t384\t1128");
   Serial.print("\n");
   #endif
     
@@ -700,6 +746,12 @@ void loop() {
     Serial.print(f1);
     Serial.print(", f2=");
     Serial.print(f2);
+    Serial.print(", f3=");
+    Serial.print(f3);
+    Serial.print(", f4=");
+    Serial.print(f4);
+    Serial.print(", f5=");
+    Serial.print(f5);
     Serial.print("\n");
     #endif
 
@@ -722,6 +774,12 @@ void loop() {
     Serial.print("\n");
     Serial.print("Outputb: ");
     Serial.print(ob);
+    Serial.print("\n");
+    Serial.print("Outputc: ");
+    Serial.print(oc);
+    Serial.print("\n");
+    Serial.print("Outputd: ");
+    Serial.print(od);
     Serial.print("\n");
     /*
     Serial.print("Potentiometers: Gain: ");
@@ -751,6 +809,24 @@ void loop() {
       if(i%15 == 14)
         Serial.print("\n");
       Serial.print(firb[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+
+    Serial.print("FIRC taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(firc[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+    
+    Serial.print("FIRD taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(fird[i]);
       Serial.print(", ");
     }
     Serial.print("]\n");
