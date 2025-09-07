@@ -99,8 +99,10 @@ int32_t samples[FIR_LEN*2];
 int next_idx;
 
 // Double-buffered FIR tap arrays
-int32_t fir1a[FIR_LEN_TABLE], fir2a[FIR_LEN_TABLE];
-int32_t fir1b[FIR_LEN_TABLE], fir2b[FIR_LEN_TABLE];
+// int32_t fir1a[FIR_LEN_TABLE], fir2a[FIR_LEN_TABLE];
+// int32_t fir1b[FIR_LEN_TABLE], fir2b[FIR_LEN_TABLE];
+// Single buffering since they are calculate at startup
+int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE];
 
 // Communication between the timer loop and the background loop is done
 // through global data, and these are defined as volatile to avoid
@@ -293,17 +295,24 @@ void setup() {
     samples[i] = 0;
     samples[i+FIR_LEN] = 0;
     fir1a[i] = 0;
-    fir2a[i] = 0;
+    //fir2a[i] = 0;
     fir1b[i] = 0;
-    fir2b[i] = 0;
+    //fir2b[i] = 0;
   }
   // Prepare lookup tables
   prepare_hamming();
   prepare_sinus();
 
   // Set up an initial FIR filter that blocks everything
-  prepare_fir(fir1a, 0.0f, 0.0f);
-  prepare_fir(fir1b, 0.0f, 0.0f);
+  //prepare_fir(fir1a, 0.0f, 0.0f);
+  //prepare_fir(fir1b, 0.0f, 0.0f);
+
+  
+  float f1 = 50; // 50Hz
+  float f2 = 1000; // 1000Hz
+  float f3 = 3000; // 3000Hz
+  prepare_fir(fir1a, f1, f2);
+  prepare_fir(fir1b, f2, f3);
   next_idx = 0;
 
   // We use 10 bits for the DAC and ADC hardware
@@ -596,7 +605,6 @@ void loop() {
   //f1_acc = 0.8f * f1_acc + 0.2f * f1_in;
   //float f1 = f1_acc;
   */
-  float f1 = 50; // 50Hz
 
   /*
   // Upper frequency f2 range split in two halves 400-1000Hz and 1000-4000Hz
@@ -609,8 +617,6 @@ void loop() {
   f2_acc = 0.8f * f2_acc + 0.2f * f2_in;
   float f2 = f2_acc;
   */
-  float f2 = 1000; // 1000Hz
-  float f3 = 3000; // 3000Hz
 
   /*
   // Special CW mode if f2 < 1000
@@ -635,16 +641,16 @@ void loop() {
   // Since the POTs are not being used, this will not change and should be handled in the setup. Probably
   // also don't need the double FIP tap buffer
   // Get the FIR tap buffer not currently in use
-  int32_t *new_fira = (fira == fir1a) ? fir2a : fir1a;
-  int32_t *new_firb = (firb == fir1b) ? fir2b : fir1b;
+  //int32_t *new_fira = (fira == fir1a) ? fir2a : fir1a;
+  //int32_t *new_firb = (firb == fir1b) ? fir2b : fir1b;
 
   // Run the generation and store in the spare buffer
-  prepare_fir(new_fira, f1, f2);
-  prepare_fir(new_firb, f2, f3);
+  //prepare_fir(new_fira, f1, f2);
+  //prepare_fir(new_firb, f2, f3);
 
   // Make the new filter live. 32 bit volatile pointer writes and reads are assumed to be atomic!
-  fira = new_fira;
-  firb = new_firb;
+  //fira = new_fira;
+  //firb = new_firb;
 
   // Update DotStar RGB LED. The LED is used to show if we are
   // getting near saturation/clipping. Enabling the DotStar
