@@ -311,12 +311,14 @@ void setup() {
   //prepare_fir(fir1a, 0.0f, 0.0f);
   //prepare_fir(fir1b, 0.0f, 0.0f);
 
+  // after adding additional filters these seemed to need to double to reach the desired frequency
+  //            Hz
+  float f1 =    20; // 16Hz
+  float f2 =   240 * 2; // just below middle C ,top of octave 3
+  float f3 =   800 * 2; // upper part of octave 5
+  float f4 =  3600 * 2; // upper part of octave 7
+  float f5 = 15000; // top of octave 9
   
-  float f1 = 50; // 50Hz
-  float f2 = 1000; // 1000Hz
-  float f3 = 3000; // 3000Hz
-  float f4 = 6000; // 6000Hz
-  float f5 = 10000; // 10000Hz
   prepare_fir(fir1a, f1, f2);
   prepare_fir(fir1b, f2, f3);
   prepare_fir(fir1c, f3, f4);
