@@ -84,6 +84,20 @@ Adafruit_DotStar strip = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 // Main sample rate
 #define sampleRate 20000
 
+// after adding additional filters these seemed to need to double to reach the desired frequency
+//            Hz
+float f1 =    20;     // lowest
+float f2 =   240 * 2; // just below middle C ,top of octave 3
+float f3 =   800 * 2; // upper part of octave 5
+float f4 =  3600 * 2; // upper part of octave 7
+float f5 = 15000;     // top of octave 9
+
+// amplification for the bands, low to high
+#define ampa 30
+#define ampb 30
+#define ampc 30
+#define ampd 30
+
 // The FIR length, optimized for the performance of the Trinket M0
 #define FIR_LEN 215
 
@@ -297,9 +311,7 @@ void setup() {
     samples[i] = 0;
     samples[i+FIR_LEN] = 0;
     fir1a[i] = 0;
-    //fir2a[i] = 0;
     fir1b[i] = 0;
-    //fir2b[i] = 0;
     fir1c[i] = 0;
     fir1d[i] = 0;
   }
@@ -310,14 +322,6 @@ void setup() {
   // Set up an initial FIR filter that blocks everything
   //prepare_fir(fir1a, 0.0f, 0.0f);
   //prepare_fir(fir1b, 0.0f, 0.0f);
-
-  // after adding additional filters these seemed to need to double to reach the desired frequency
-  //            Hz
-  float f1 =    20; // 16Hz
-  float f2 =   240 * 2; // just below middle C ,top of octave 3
-  float f3 =   800 * 2; // upper part of octave 5
-  float f4 =  3600 * 2; // upper part of octave 7
-  float f5 = 15000; // top of octave 9
   
   prepare_fir(fir1a, f1, f2);
   prepare_fir(fir1b, f2, f3);
@@ -416,6 +420,17 @@ void TC5_Handler (void)
 
   // Must acknowledge the interrupt request for it to trigger again
   TC5->COUNT16.INTFLAG.bit.MC0 = 1;
+}
+
+uint32_t clamp_output(int32_t o2)
+{
+  if(o2 < -511) {
+    return(0);
+  } else if(o2 > 511) {
+    return(1023);
+  } else {
+    return(o2 + 512);
+  }
 }
 
 // Main sample functions. Called in interrupt context once every sample period.
@@ -519,10 +534,10 @@ void sample_event()
   accd >>= 6;
 
   // hardcode a gain since not using POT
-  acca *= 100;
-  accb *= 100;
-  accc *= 100;
-  accd *= 100;
+  acca *= ampa;
+  accb *= ampb;
+  accc *= ampc;
+  accd *= ampd;
 
   // We have 4 bits to go to compensate for the gain, and 16 bit shift for the FIR table multiplier.
   // But we want the gain to actually be able to amplify. If we skip shifting 5 steps, the max
@@ -533,34 +548,11 @@ void sample_event()
   int32_t o2d = accd >> (4 + 16 - 5);
 
   // Clamping of the output
-  if(o2a < -511) {
-    oa = 0;
-  } else if(o2a > 511) {
-    oa = 1023;
-  } else {
-    oa = o2a + 512;
-  }
-  if(o2b < -511) {
-    ob = 0;
-  } else if(o2b > 511) {
-    ob = 1023;
-  } else {
-    ob = o2b + 512;
-  }
-  if(o2c < -511) {
-    oc = 0;
-  } else if(o2c > 511) {
-    oc = 1023;
-  } else {
-    oc = o2c + 512;
-  }
-  if(o2d < -511) {
-    od = 0;
-  } else if(o2d > 511) {
-    od = 1023;
-  } else {
-    od = o2d + 512;
-  }
+  oa = clamp_output(o2a);
+  ob = clamp_output(o2b);
+  oc = clamp_output(o2c);
+  od = clamp_output(o2d);
+  
   // The DAC will be updated at the start of the next interrupt to minimize jitter
 
   // Detect if we are near to clipping/overdrive
