@@ -68,13 +68,29 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 #define VERSION "1.2"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
-#define PLOTTER 1
+//#define PLOTTER 1
 // #define MONITOR 1
 // #define DEBUG 1
 
 #include <Adafruit_DotStar.h>
 // Init DotStar module
-Adafruit_DotStar strip = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
+Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
+
+
+// pixel strip / light show config
+// reminder, mic is using PIN 2
+#define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
+#define N_PIXELS  8  // Number of pixels you are using
+#define TOP N_PIXELS / 4 // effectively number of pixels per band
+//#define LIGHT_NOISE 20 
+#define LSAMPLES 32    //rotating buffer size, power of 2 makes for easy average
+
+int filteredSamples[4][LSAMPLES];
+
+#include <Adafruit_NeoPixel.h>
+Adafruit_NeoPixel  strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// end of light show config
 
 // Useful macros for syncing
 #define GCLK_SYNC() while(GCLK->STATUS.bit.SYNCBUSY){}
@@ -93,10 +109,10 @@ float f4 =  3600 * 2; // upper part of octave 7
 float f5 = 15000;     // top of octave 9
 
 // amplification for the bands, low to high
-#define ampa 30
-#define ampb 30
-#define ampc 30
-#define ampd 30
+#define ampa 80 // was 30
+#define ampb 80
+#define ampc 80
+#define ampd 80
 
 // The FIR length, optimized for the performance of the Trinket M0
 #define FIR_LEN 215
@@ -301,9 +317,14 @@ void setup() {
   // The DotStar LED is causing a small interference on the ADC
   // sampling, so we want to keep it off under normal operating
   // conditions.
+  star.begin();
+  star.setBrightness(50);  // Adjust here if it is to bright or dull
+  star.setPixelColor(0, 0, 0, 0);  // Black = off
+  star.show();
+
+  // clear the strip
   strip.begin();
-  strip.setBrightness(50);  // Adjust here if it is to bright or dull
-  strip.setPixelColor(0, 0, 0, 0);  // Black = off
+  strip.clear();
   strip.show();
 
   // Init buffers
@@ -432,6 +453,7 @@ uint32_t clamp_output(int32_t o2)
     return(o2 + 512);
   }
 }
+
 
 // Main sample functions. Called in interrupt context once every sample period.
 void sample_event()
@@ -699,14 +721,23 @@ void loop() {
   // get the best quality output audio.
   if(output_error_ticks < 2000) {
     // We have seen error conditions during the last 0.1s
-    strip.setPixelColor(0, 255, 0, 0);  // Angry red color on RGB LED
+    star.setPixelColor(0, 255, 0, 0);  // Angry red color on RGB LED
   } else if(output_warning_ticks < 2000) {
     // We have seen warning conditions during the last 0.1s
-    strip.setPixelColor(0, 191, 191, 0);  // Yellow color
+    star.setPixelColor(0, 191, 191, 0);  // Yellow color
   } else {
     // All ok, switch the LEDs off to avoid interference on the input
-    strip.setPixelColor(0, 0, 0, 0);  // All off, dark means good signal
+    star.setPixelColor(0, 0, 0, 0);  // All off, dark means good signal
   }
+  star.show();
+
+
+Serial.println("pixls");
+  // color pixels
+  set_band_color(0, oa, 10, 0, 0);
+  set_band_color(1, ob, 0, 10, 0);
+  set_band_color(2, oc, 0, 0, 10);
+  set_band_color(3, od, 10, 0, 10);
   strip.show();
 
   // More timing
@@ -826,5 +857,31 @@ void loop() {
     Serial.print("]\n");
 
     #endif
+  }
+}
+
+// i - 0 - 3 - being the frequency range represented on the pixel strip
+// y - being the intensity
+// r,b,g being the base colors
+void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
+{
+  int rem;
+  int itop = i * TOP;
+  //int lvl = map(y, 0, 1023, 0, TOP*16-1)*31>>5; // might need to dampen elsewhere rather than use map to achieve this
+  int lvl = map(abs(512-y), 0, 512, 0, TOP*16+64)>>2; // might need to dampen elsewhere rather than use map to achieve this
+  Serial.print("top: ");
+  Serial.print(TOP);
+  Serial.print(" lvl: ");
+  Serial.println(y);
+  Serial.println(lvl);
+  for(int ix=0; ix < TOP; ix++){
+    rem = lvl & 15; // remainder
+    lvl >>= 4;      // divide by 16 
+    
+    //if(lvl > ix) {
+      strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
+    //} else {
+    //  strip.setPixelColor(itop + ix, 0, 0, 0);
+    //}
   }
 }
