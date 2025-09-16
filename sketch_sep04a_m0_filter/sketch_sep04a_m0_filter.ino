@@ -65,7 +65,9 @@ The range for all pins are GND to VDD (3.3V). Analog input protection
 diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 */
 
-#define VERSION "1.2"
+#define VERSION "1.3"
+
+#include "lighting.h"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
 //#define PLOTTER 1
@@ -75,22 +77,6 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 #include <Adafruit_DotStar.h>
 // Init DotStar module
 Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
-
-
-// pixel strip / light show config
-// reminder, mic is using PIN 2
-#define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
-#define N_PIXELS  8  // Number of pixels you are using
-#define TOP N_PIXELS / 4 // effectively number of pixels per band
-//#define LIGHT_NOISE 20 
-#define LSAMPLES 32    //rotating buffer size, power of 2 makes for easy average
-
-int filteredSamples[4][LSAMPLES];
-
-#include <Adafruit_NeoPixel.h>
-Adafruit_NeoPixel  strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
-
-// end of light show config
 
 // Useful macros for syncing
 #define GCLK_SYNC() while(GCLK->STATUS.bit.SYNCBUSY){}
@@ -322,10 +308,7 @@ void setup() {
   star.setPixelColor(0, 0, 0, 0);  // Black = off
   star.show();
 
-  // clear the strip
-  strip.begin();
-  strip.clear();
-  strip.show();
+  setup_strip();
 
   // Init buffers
   for(int i=0; i<FIR_LEN; i++) {
@@ -453,7 +436,6 @@ uint32_t clamp_output(int32_t o2)
     return(o2 + 512);
   }
 }
-
 
 // Main sample functions. Called in interrupt context once every sample period.
 void sample_event()
@@ -731,14 +713,7 @@ void loop() {
   }
   star.show();
 
-
-Serial.println("pixls");
-  // color pixels
-  set_band_color(0, oa, 10, 0, 0);
-  set_band_color(1, ob, 0, 10, 0);
-  set_band_color(2, oc, 0, 0, 10);
-  set_band_color(3, od, 10, 0, 10);
-  strip.show();
+  update_light_strip(oa, ob, oc, od);
 
   // More timing
   unsigned long loop_end_timer = micros();
@@ -857,31 +832,5 @@ Serial.println("pixls");
     Serial.print("]\n");
 
     #endif
-  }
-}
-
-// i - 0 - 3 - being the frequency range represented on the pixel strip
-// y - being the intensity
-// r,b,g being the base colors
-void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
-{
-  int rem;
-  int itop = i * TOP;
-  //int lvl = map(y, 0, 1023, 0, TOP*16-1)*31>>5; // might need to dampen elsewhere rather than use map to achieve this
-  int lvl = map(abs(512-y), 0, 512, 0, TOP*16+64)>>2; // might need to dampen elsewhere rather than use map to achieve this
-  Serial.print("top: ");
-  Serial.print(TOP);
-  Serial.print(" lvl: ");
-  Serial.println(y);
-  Serial.println(lvl);
-  for(int ix=0; ix < TOP; ix++){
-    rem = lvl & 15; // remainder
-    lvl >>= 4;      // divide by 16 
-    
-    //if(lvl > ix) {
-      strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
-    //} else {
-    //  strip.setPixelColor(itop + ix, 0, 0, 0);
-    //}
   }
 }
