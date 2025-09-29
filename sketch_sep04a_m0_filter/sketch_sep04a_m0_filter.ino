@@ -95,10 +95,10 @@ float f4 =  3600 * 2; // upper part of octave 7
 float f5 = 15000;     // top of octave 9
 
 // amplification for the bands, low to high
-#define ampa 100 // was 30
-#define ampb 100
-#define ampc 100
-#define ampd 100
+#define ampa 80 // was 30
+#define ampb 80
+#define ampc 80
+#define ampd 80
 
 // The FIR length, optimized for the performance of the Trinket M0
 #define FIR_LEN 215

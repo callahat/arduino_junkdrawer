@@ -14,11 +14,13 @@
 
 #define MAX_LVL 512
 #define MIN_LVL 0
-#define MIN_LVL_DIFF 32
+#define MIN_LVL_DIFF 96
+#define DECAY_MS 500
+#define DECAY_LEVEL 10
+
+unsigned long decayMillis = 0, currentMillis;
 
 int filteredSamples[4][LSAMPLES];
-
-
 
 int tops[4] = {MIN_LVL, MIN_LVL, MIN_LVL, MIN_LVL};
 int lows[4] = {MAX_LVL, MAX_LVL, MAX_LVL, MAX_LVL}; 
@@ -43,7 +45,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   int itop = i * TOP; // starting pixel for this band
 
   //int lvl = map(abs(512-y), 0, 512, 0, TOP*16+64)>>2; // might need to dampen elsewhere rather than use map to achieve this
-  int absy = abs(512-y);
+  int absy = abs(MAX_LVL-y);
 
   // attempt 
   if(absy > tops[i]) {
@@ -52,29 +54,24 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   if (absy < lows[i]) {
     lows[i] = absy;
   }
-
+  
   // ensure top is greater than low by MIN_LVL_DIFF, and ensure
   // top is not out of bounds since if its too close it is set as
   // low + MIN_LVL_DIFF
-  if(tops[i] - MIN_LVL_DIFF < lows[i]  ) {
+  if(tops[i] - MIN_LVL_DIFF < lows[i]) {
     tops[i] = lows[i] + MIN_LVL_DIFF;
-    lowAdjust = max(tops[i], MAX_LVL) - 512; 
+    lowAdjust = max(tops[i], MAX_LVL) - MAX_LVL; 
   }
   lows[i] -= lowAdjust;
+  lows[i] = max(lows[i], 0);
 
   // instead of 0 and 512 for the range of the map, use the lows and the tops to
   // allow more of the band to be filled on relative loud samples (and have it be blank on relative
   // quiet samples). 
-  int lvl = map(absy>>2, lows[i], tops[i]>>2, 0, TOP*LVLS_PER_PIXEL+64); // might need to dampen elsewhere rather than use map to achieve this
-  
-  //Serial.print("top: ");
-  //Serial.print(TOP);
-  //Serial.print(" lvl: ");
-  //Serial.println(y);
-  //Serial.println(lvl);
+  int lvl = map(absy>>4, lows[i]>>4, tops[i]>>4, 0, TOP*LVLS_PER_PIXEL); // might need to dampen elsewhere rather than use map to achieve this
   
   #ifdef PLOTTER_LIGHT
-  if(i == 0){
+  if(i == 3){
   Serial.print(0);
   Serial.print("\t");
   Serial.print(512);
@@ -99,6 +96,16 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
 // each power value should range from 0-1024, with "quiet" being around 512.
 void update_light_strip(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band)
 {
+  currentMillis = millis();
+
+  if(currentMillis - decayMillis > DECAY_MS) {
+    decayMillis = currentMillis;
+    for(byte ix=0; ix<4; ix++){
+      tops[ix] -= DECAY_LEVEL;
+      lows[ix] += 1;
+    }
+   }
+
   set_band_color(0, lowest_band, 10, 0, 0);
   set_band_color(1, mid_band, 0, 10, 0);
   set_band_color(2, high_band, 0, 0, 10);
