@@ -1,38 +1,81 @@
+// plotter debugging
 #define PLOTTER_LIGHT 1
 
 // pixel strip / light show config
 // reminder, mic is using PIN 2
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
 #define N_PIXELS  8  // Number of pixels you are using
-#define TOP N_PIXELS / 4 // effectively number of pixels per band
-//#define LIGHT_NOISE 20 
-#define LSAMPLES 32    //rotating buffer size, power of 2 makes for easy average
+#define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
 
+// Averaging the last X samples produces a smoother graph of LED intensities,
+// LSAMPLES closer to zero can have more rapid bright/off switching strobe effect.
+// Averaging also has a side effect of dampening, so the dampening shifters should be reduced.
+#define USE_AVERAGE_SAMPLING // Comment this out to disable averaging the samples to get a smoother graph
+#define LSAMPLES 32    //rotating buffer size, power of 2 makes for easy average
+#define LSAMPLE_SHIFT_DIVIDER 5    // 2^n = LSAMPLES
+#define LSAMPLES_MASK LSAMPLES - 1 // A quick way to enforce a rolling incremented index
+
+// Effectively use these to throw out low amplitude "noise"
+// Should be adjusted lower when there are more pixels (need to check this, might need more dampening?) and
+//   lower when there are more samples averaged
+// Setting these to 2 seems to be good when averaging with 16 or more samples, otherwis 4 seems a good setting
+// Setting the LOW dampener higher will cut out queiter noises from lighting up the band 
+#define LOWS_DAMPEN_SHIFTER 2
+// Setting the TOP Dampener higher will skew the band in the more "light up" direction
+#define TOPS_DAMPEN_SHIFTER 2
+
+// How many levels of brightness per pixel. Each band is divided into pixels with levels of brightness.
+// Should be a power of two for faster division via bit shifting
 #define LVLS_PER_PIXEL 16
 #define PIXEL_REMAINDER LVLS_PER_PIXEL - 1
-#define PIXEL_SHIFT_DIVIDER 3
+#define PIXEL_SHIFT_DIVIDER 3 // another power of two for a quick division
 
 #define MAX_LVL 512
 #define MIN_LVL 0
-#define MIN_LVL_DIFF 96
+// Don't let the relative high/low decay to the point where even very quiet is filling up the whole light band
+#define MIN_LVL_DIFF 64
+// Decay and rate for the local high levels; allows the MAX to slide down so that
+// for quieter sounds the full band can still light up all the way for a relative peak
 #define DECAY_MS 500
 #define DECAY_LEVEL 10
 
 unsigned long decayMillis = 0, currentMillis;
 
+// Tracking the past samples to average
+#if defined USE_AVERAGE_SAMPLING
 int filteredSamples[4][LSAMPLES];
+int filteredSampleSum[4] = {0, 0, 0, 0};
+int lSampleIndex = 0; // last sample index
+#endif
 
 int tops[4] = {MIN_LVL, MIN_LVL, MIN_LVL, MIN_LVL};
 int lows[4] = {MAX_LVL, MAX_LVL, MAX_LVL, MAX_LVL}; 
 
 #include <Adafruit_NeoPixel.h>
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+// 8 neopixel strip setup
+ Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+// Pebble strand setup
+// Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
 
 void setup_strip()
 {
   strip.begin();
   strip.clear();
   strip.show();
+}
+
+int processSample(byte i, int absy) {
+#if defined USE_AVERAGE_SAMPLING
+  filteredSampleSum[i] = filteredSampleSum[i] - filteredSamples[i][lSampleIndex] + absy;
+  filteredSamples[i][lSampleIndex] = absy;
+
+  lSampleIndex += 1;
+  lSampleIndex &= LSAMPLES_MASK;
+
+  return(filteredSampleSum[i] >> LSAMPLE_SHIFT_DIVIDER);
+#else
+  return(absy);
+#endif
 }
 
 // i - 0 - 3 - being the frequency range represented on the pixel strip
@@ -44,15 +87,16 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   int rem;
   int itop = i * TOP; // starting pixel for this band
 
-  //int lvl = map(abs(512-y), 0, 512, 0, TOP*16+64)>>2; // might need to dampen elsewhere rather than use map to achieve this
   int absy = abs(MAX_LVL-y);
 
+  int sample = processSample(i, absy);
+
   // attempt 
-  if(absy > tops[i]) {
-    tops[i] = absy;
+  if(sample > tops[i]) {
+    tops[i] = sample;
   } 
-  if (absy < lows[i]) {
-    lows[i] = absy;
+  if (sample < lows[i]) {
+    lows[i] = sample;
   }
   
   // ensure top is greater than low by MIN_LVL_DIFF, and ensure
@@ -68,7 +112,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   // instead of 0 and 512 for the range of the map, use the lows and the tops to
   // allow more of the band to be filled on relative loud samples (and have it be blank on relative
   // quiet samples). 
-  int lvl = map(absy>>4, lows[i]>>4, tops[i]>>4, 0, TOP*LVLS_PER_PIXEL); // might need to dampen elsewhere rather than use map to achieve this
+  int lvl = map(sample>>LOWS_DAMPEN_SHIFTER, lows[i]>>LOWS_DAMPEN_SHIFTER, tops[i]>>TOPS_DAMPEN_SHIFTER, 0, TOP*LVLS_PER_PIXEL);
   
   #ifdef PLOTTER_LIGHT
   if(i == 3){
@@ -80,7 +124,9 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   Serial.print("\t");
   Serial.print(tops[i]);
   Serial.print("\t");
-  Serial.println(absy);
+  Serial.print(absy);
+  Serial.print("\t");
+  Serial.println(sample);
   }
   #endif
   
@@ -104,7 +150,7 @@ void update_light_strip(int32_t lowest_band, int32_t mid_band, int32_t high_band
       tops[ix] -= DECAY_LEVEL;
       lows[ix] += 1;
     }
-   }
+  }
 
   set_band_color(0, lowest_band, 10, 0, 0);
   set_band_color(1, mid_band, 0, 10, 0);
