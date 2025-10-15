@@ -1,7 +1,5 @@
-
 #define DELAY_TIME (250)   // a pre-processor macro in ms
 #define NUM_PIXELS (8)      // how many neo pixels we have
-#define NEO_PIXEL_PIN (2)   // the data pin for the NeoPixels
 #define COMPLETED_PIXEL (7) // one million has reach RGB at 100
 #define CLEARED_PIXEL (0)   // back to black
 
@@ -13,16 +11,11 @@ int delta = 1;
 int i;
 
 void setup() {
-  // put your setup code here, to run once:
  // Serial.begin(115200);
   Serial1.begin(9600);
-
   
   setupPixelBuff();
-  
 }
-
-
 
 void setupPixelBuff() {
   for (i = 0; i < NUM_PIXELS; i++){
@@ -31,10 +24,8 @@ void setupPixelBuff() {
 }
 
 void loop() {
-
   activate();
 
-  // delay for the purposes of debouncing the switch
   delay(DELAY_TIME);
 }
 
@@ -79,10 +70,10 @@ void activate() {
   Serial.print("completed pixel: ");
   Serial.println(completedPixel);
   Serial.println("Coloring pixels");*/
-    for( i = 0; i < NUM_PIXELS; i++ ) {
-      Serial.print(pixelBuff[i]);
-      Serial1.print(pixelBuff[i]);
-    }
+  for( i = 0; i < NUM_PIXELS; i++ ) {
+    Serial.print(pixelBuff[i]);
+    Serial1.print(pixelBuff[i]);
+  }
   Serial.println();
   Serial1.println();
 }
