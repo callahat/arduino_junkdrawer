@@ -67,10 +67,8 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 
 #define VERSION "1.3"
 
-#include "lighting.h"
-
 // Uncomment to enable additional debug output on the virtual USB serial port
-//#define PLOTTER 1
+#define PLOTTER 1
 // #define MONITOR 1
 // #define DEBUG 1
 
@@ -298,7 +296,8 @@ void prepare_fir(int32_t *fir, float freq1, float freq2) {
 
 // Init routine, run once after boot
 void setup() {
-
+  Serial.begin(9600);
+  Serial1.begin(115200);
   // Start by initialize the DotStar RGB and switch it off.
   // The DotStar LED is causing a small interference on the ADC
   // sampling, so we want to keep it off under normal operating
@@ -307,8 +306,6 @@ void setup() {
   star.setBrightness(50);  // Adjust here if it is to bright or dull
   star.setPixelColor(0, 0, 0, 0);  // Black = off
   star.show();
-
-  setup_strip();
 
   // Init buffers
   for(int i=0; i<FIR_LEN; i++) {
@@ -627,6 +624,17 @@ void sample_event()
   #endif
 }
 
+void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band) {
+  Serial1.print(lowest_band);
+  Serial1.print(',');
+  Serial1.print(mid_band);
+  Serial1.print(',');
+  Serial1.print(high_band);
+  Serial1.print(',');
+  Serial1.print(highest_band);
+  Serial1.println();
+}
+
 // The background loop!
 void loop() {
 
@@ -713,7 +721,7 @@ void loop() {
   }
   star.show();
 
-  update_light_strip(oa, ob, oc, od);
+  printFrequencyOverSerial(oa, ob, oc, od);
 
   // More timing
   unsigned long loop_end_timer = micros();

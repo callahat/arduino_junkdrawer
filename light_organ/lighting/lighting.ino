@@ -1,6 +1,27 @@
+/*
+--------------------------------------------------------------------------
+Copyright 2025 callahat
+
+Permission to use, copy, modify, and/or distribute this software for
+any purpose with or without fee is hereby granted, provided that the
+above copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+--------------------------------------------------------------------------
+
+Serial Light Organ
+==================
+
+*/
+
 // plotter debugging
-// #define DEBUGGING_PLOT_LIGHT 1
-#define DEBUGGING_LIGHT_UPDATES // serial how many light updates per second occur
+//#define DEBUGGING_PLOT_LIGHT 1
 
 // pixel strip / light show config
 // reminder, mic is using PIN 2
@@ -13,7 +34,7 @@
 // Averaging also has a side effect of dampening, so the dampening shifters should be reduced.
 // This should not be too high; the lights only update ~260-270 times a second with this on,
 // and it also seems to add a bit of a lag to the light.
-#define USE_AVERAGE_SAMPLING // Comment this out to disable averaging the samples to get a smoother graph
+//#define USE_AVERAGE_SAMPLING // Comment this out to disable averaging the samples to get a smoother graph
 #define LSAMPLES 8    //rotating buffer size, power of 2 makes for easy average
 #define LSAMPLE_SHIFT_DIVIDER 3    // 2^n = LSAMPLES
 #define LSAMPLES_MASK LSAMPLES - 1 // A quick way to enforce a rolling incremented index
@@ -50,13 +71,9 @@ int filteredSampleSum[4] = {0, 0, 0, 0};
 int lSampleIndex = 0; // last sample index
 #endif
 
+int currentSample[4] = {512, 512 ,512, 512};
 int tops[4] = {MIN_LVL, MIN_LVL, MIN_LVL, MIN_LVL};
 int lows[4] = {MAX_LVL, MAX_LVL, MAX_LVL, MAX_LVL}; 
-
-#ifdef DEBUGGING_LIGHT_UPDATES
-unsigned long debugLightUpdateMillis;
-int updateLightStripCalls;
-#endif
 
 #include <Adafruit_NeoPixel.h>
 // 8 neopixel strip setup
@@ -64,11 +81,73 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ
 // Pebble strand setup
 // Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
 
-void setup_strip()
-{
+#include <Adafruit_DotStar.h>
+// Init DotStar module
+Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
+
+char serialBuffer[100];
+size_t l;
+
+// byte iSample, iBuff;
+
+void setup() {
+  Serial.begin(9600);
+  Serial1.begin(115200);
+
+  star.begin(); // turn off the dotstar
+  star.clear();
+  star.show();
+
   strip.begin();
   strip.clear();
   strip.show();
+}
+
+void loop() {
+  readSerialData();
+  parseSerialData();
+  updateLightStrip();
+}
+
+void readSerialData() {
+  if(Serial1.available()) {
+    l = Serial1.readBytesUntil('\n', serialBuffer, 100);
+    serialBuffer[l+1] = 0;
+    Serial.println("Read:");
+    Serial.println(serialBuffer);
+  }
+}
+
+void parseSerialData() {
+  byte iSample = 0;
+  byte iBuff = 0;
+
+  int tmpSample;
+
+  while(serialBuffer[iBuff] != 0 && iSample < 4 && iBuff < 100) {
+    tmpSample = 0;
+    Serial.print("Parsing pos ");
+    Serial.println(iSample);
+    
+    while(serialBuffer[iBuff] != ',' && serialBuffer[iBuff] != 0) {
+      if(serialBuffer[iBuff] >= '0' and serialBuffer[iBuff] <= '9') {
+        tmpSample *= 10;
+        tmpSample += serialBuffer[iBuff] - '0';
+      }
+      Serial.print(tmpSample);
+      Serial.print(" -> ");
+      iBuff++;
+    }
+    iBuff++;
+    Serial.println();
+    Serial.print("Parsed: ");
+    Serial.println(tmpSample);
+    if(tmpSample > 0 && tmpSample < 1023) { 
+      currentSample[iSample] = tmpSample;
+    }
+    iSample++;
+  }
+  Serial.println();
 }
 
 int processSample(byte i, int absy) {
@@ -144,19 +223,10 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
 
 // power readings from the four bands we are filtering into
 // each power value should range from 0-1024, with "quiet" being around 512.
-void update_light_strip(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band)
+void updateLightStrip()
 {
   currentMillis = millis();
   
-  #ifdef DEBUGGING_LIGHT_UPDATES
-  updateLightStripCalls++;
-  if(currentMillis - 1000 > debugLightUpdateMillis) {
-    Serial.println(updateLightStripCalls);
-    updateLightStripCalls = 0;
-    debugLightUpdateMillis = currentMillis;
-  }
-  #endif
-
   if(currentMillis - decayMillis > DECAY_MS) {
     decayMillis = currentMillis;
     for(byte ix=0; ix<4; ix++){
@@ -169,10 +239,19 @@ void update_light_strip(int32_t lowest_band, int32_t mid_band, int32_t high_band
   lSampleIndex += 1;
   lSampleIndex &= LSAMPLES_MASK;
   #endif
+  Serial.print("current sample:");
+  Serial.print(currentSample[0]);
+  Serial.print(", ");
+  Serial.print(currentSample[1]);
+  Serial.print(", ");
+  Serial.print(currentSample[2]);
+  Serial.print(", ");
+  Serial.print(currentSample[3]);
+  Serial.println();
 
-  set_band_color(0, lowest_band, 10, 0, 0);
-  set_band_color(1, mid_band, 0, 10, 0);
-  set_band_color(2, high_band, 0, 0, 10);
-  set_band_color(3, highest_band, 10, 0, 10);
+  set_band_color(0, currentSample[0], 10, 0, 0);  // low
+  set_band_color(1, currentSample[1], 0, 10, 0);  // mid
+  set_band_color(2, currentSample[2], 0, 0, 10);  // high
+  set_band_color(3, currentSample[3], 10, 0, 10); //highest
   strip.show();
 }
