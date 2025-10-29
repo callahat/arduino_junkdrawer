@@ -20,20 +20,27 @@ Serial Light Organ
 
 */
 
-// plotter debugging
-//#define DEBUGGING_PLOT_LIGHT 1
+// This MUST match the baud rate in the filter file
+#define SERIAL_BAUD 250000
+
+// Debugging serial prints
+// Plot sample, processed sample, and tops/lows for the given band
+//#define DEBUGGING_PLOT_LIGHT 2
+// Echo what comes across Serial1
+//#define DEBUGGING_SERIAL1_READ
+//#define DEBUGGING_CURRENT_SAMPLE
 
 // pixel strip / light show config
-// reminder, mic is using PIN 2
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
 #define N_PIXELS  8  // Number of pixels you are using
 #define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
 
-// Averaging the last X samples to produce a smoother graph of LED intensities,
-// LSAMPLES closer to zero can have more rapid bright/off switching strobe effect.
-// Averaging also has a side effect of dampening, so the dampening shifters should be reduced.
-// This should not be too high; the lights only update ~260-270 times a second with this on,
-// and it also seems to add a bit of a lag to the light.
+/* Averaging the last X samples to produce a smoother graph of LED intensities,
+ * LSAMPLES closer to zero can have more rapid bright/off switching strobe effect.
+ * Averaging also has a side effect of dampening, so the dampening shifters should be reduced.
+ * This should not be too high; the lights only update ~260-270 times a second with this on,
+ * and it also seems to add a bit of a lag to the light.
+ */
 //#define USE_AVERAGE_SAMPLING // Comment this out to disable averaging the samples to get a smoother graph
 #define LSAMPLES 8    //rotating buffer size, power of 2 makes for easy average
 #define LSAMPLE_SHIFT_DIVIDER 3    // 2^n = LSAMPLES
@@ -91,8 +98,8 @@ size_t l;
 // byte iSample, iBuff;
 
 void setup() {
-  Serial.begin(9600);
-  Serial1.begin(115200);
+  Serial.begin(SERIAL_BAUD);
+  Serial1.begin(SERIAL_BAUD);
 
   star.begin(); // turn off the dotstar
   star.clear();
@@ -113,8 +120,11 @@ void readSerialData() {
   if(Serial1.available()) {
     l = Serial1.readBytesUntil('\n', serialBuffer, 100);
     serialBuffer[l+1] = 0;
-    Serial.println("Read:");
+    
+    #ifdef DEBUGGING_SERIAL1_READ
+    Serial.print("Read:");
     Serial.println(serialBuffer);
+    #endif
   }
 }
 
@@ -126,28 +136,22 @@ void parseSerialData() {
 
   while(serialBuffer[iBuff] != 0 && iSample < 4 && iBuff < 100) {
     tmpSample = 0;
-    Serial.print("Parsing pos ");
-    Serial.println(iSample);
     
     while(serialBuffer[iBuff] != ',' && serialBuffer[iBuff] != 0) {
       if(serialBuffer[iBuff] >= '0' and serialBuffer[iBuff] <= '9') {
         tmpSample *= 10;
         tmpSample += serialBuffer[iBuff] - '0';
       }
-      Serial.print(tmpSample);
-      Serial.print(" -> ");
+
       iBuff++;
     }
     iBuff++;
-    Serial.println();
-    Serial.print("Parsed: ");
-    Serial.println(tmpSample);
+
     if(tmpSample > 0 && tmpSample < 1023) { 
       currentSample[iSample] = tmpSample;
     }
     iSample++;
   }
-  Serial.println();
 }
 
 int processSample(byte i, int absy) {
@@ -198,7 +202,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   int lvl = map(sample>>LOWS_DAMPEN_SHIFTER, lows[i]>>LOWS_DAMPEN_SHIFTER, tops[i]>>TOPS_DAMPEN_SHIFTER, 0, TOP*LVLS_PER_PIXEL);
   
   #ifdef DEBUGGING_PLOT_LIGHT
-  if(i == 2){
+  if(i == DEBUGGING_PLOT_LIGHT){
   Serial.print(0);
   Serial.print("\t");
   Serial.print(512);
@@ -239,19 +243,21 @@ void updateLightStrip()
   lSampleIndex += 1;
   lSampleIndex &= LSAMPLES_MASK;
   #endif
-  Serial.print("current sample:");
+  #ifdef DEBUGGING_CURRENT_SAMPLE
+  Serial.print("current_sample:");
   Serial.print(currentSample[0]);
-  Serial.print(", ");
+  Serial.print(",");
   Serial.print(currentSample[1]);
-  Serial.print(", ");
+  Serial.print(",");
   Serial.print(currentSample[2]);
-  Serial.print(", ");
+  Serial.print(",");
   Serial.print(currentSample[3]);
   Serial.println();
+  #endif
 
   set_band_color(0, currentSample[0], 10, 0, 0);  // low
   set_band_color(1, currentSample[1], 0, 10, 0);  // mid
   set_band_color(2, currentSample[2], 0, 0, 10);  // high
-  set_band_color(3, currentSample[3], 10, 0, 10); //highest
+  set_band_color(3, currentSample[3], 10, 0, 10); // highest
   strip.show();
 }

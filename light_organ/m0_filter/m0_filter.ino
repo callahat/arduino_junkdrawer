@@ -84,6 +84,9 @@ Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 // Main sample rate
 #define sampleRate 20000
 
+// This MUST match the baud rate in the lighting file
+#define SERIAL_BAUD 250000
+
 // after adding additional filters these seemed to need to double to reach the desired frequency
 //            Hz
 float f1 =    20;     // lowest
@@ -296,8 +299,8 @@ void prepare_fir(int32_t *fir, float freq1, float freq2) {
 
 // Init routine, run once after boot
 void setup() {
-  Serial.begin(9600);
-  Serial1.begin(115200);
+  Serial.begin(SERIAL_BAUD);
+  Serial1.begin(SERIAL_BAUD);
   // Start by initialize the DotStar RGB and switch it off.
   // The DotStar LED is causing a small interference on the ADC
   // sampling, so we want to keep it off under normal operating
