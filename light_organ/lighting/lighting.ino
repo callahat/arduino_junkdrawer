@@ -32,7 +32,8 @@ Serial Light Organ
 
 // pixel strip / light show config
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
-#define N_PIXELS  8  // Number of pixels you are using
+//#define N_PIXELS  8  // Number of pixels you are using
+#define N_PIXELS  100  // Pebble strand
 #define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
 
 /* Averaging the last X samples to produce a smoother graph of LED intensities,
@@ -97,12 +98,19 @@ size_t l;
 
 // byte iSample, iBuff;
 
+#define MONITOR_SERIAL_READS 1
+#ifdef MONITOR_SERIAL_READS
+int processedSerialCount = 0;
+bool processedSerialCountLightOn = false;
+#endif
+
 void setup() {
   Serial.begin(SERIAL_BAUD);
   Serial1.begin(SERIAL_BAUD);
 
-  star.begin(); // turn off the dotstar
-  star.clear();
+  star.begin();
+  star.setBrightness(50);
+  star.setPixelColor(0, 0, 0, 0);
   star.show();
 
   strip.begin();
@@ -124,6 +132,22 @@ void readSerialData() {
     #ifdef DEBUGGING_SERIAL1_READ
     Serial.print("Read:");
     Serial.println(serialBuffer);
+    #endif
+    
+    #ifdef MONITOR_SERIAL_READS
+    processedSerialCount++;
+    if(processedSerialCount > 100) {
+      Serial.println("ON");
+      processedSerialCount = 0;
+      processedSerialCountLightOn = true;
+      star.setPixelColor(0, 0, 0, 255);
+      star.show();
+    } else if(processedSerialCountLightOn && processedSerialCount > 5) {
+      Serial.println("OFF");
+      processedSerialCountLightOn = false;
+      star.setPixelColor(0, 0, 0, 0);
+      star.show();
+    }
     #endif
   }
 }
@@ -220,6 +244,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   for(int ix=0; ix < TOP; ix++){
     rem = lvl & PIXEL_REMAINDER; // remainder
     lvl >>= PIXEL_SHIFT_DIVIDER;      // divide by 16 
+    if(lvl > 0) { rem = PIXEL_REMAINDER; }
 
     strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
   }

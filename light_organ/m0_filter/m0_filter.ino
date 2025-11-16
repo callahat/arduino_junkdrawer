@@ -68,7 +68,7 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 #define VERSION "1.3"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
-#define PLOTTER 1
+// #define PLOTTER 1
 // #define MONITOR 1
 // #define DEBUG 1
 
@@ -155,6 +155,13 @@ volatile uint32_t output_warning_ticks = 65000;
 // Some timing for debug messages
 #ifdef DEBUG
   volatile unsigned long timing = 0, last_timing = 0, interrupt_timing = 0;
+#endif
+
+
+#define MONITOR_SERIAL_WRITES 1
+#ifdef MONITOR_SERIAL_WRITES
+int processedSerialCount = 0;
+bool processedSerialCountLightOn = false;
 #endif
 
 // Hamming window function using floating points.
@@ -299,7 +306,9 @@ void prepare_fir(int32_t *fir, float freq1, float freq2) {
 
 // Init routine, run once after boot
 void setup() {
+#if defined(PLOTTER) || defined(MONITOR) || defined(DEBUG)
   Serial.begin(SERIAL_BAUD);
+#endif
   Serial1.begin(SERIAL_BAUD);
   // Start by initialize the DotStar RGB and switch it off.
   // The DotStar LED is causing a small interference on the ADC
@@ -636,6 +645,20 @@ void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t hig
   Serial1.print(',');
   Serial1.print(highest_band);
   Serial1.println();
+
+    #ifdef MONITOR_SERIAL_WRITES
+    processedSerialCount++;
+    if(processedSerialCount > 100) {
+      processedSerialCount = 0;
+      processedSerialCountLightOn = true;
+      star.setPixelColor(0, 0, 0, 255);
+      star.show();
+    } else if(processedSerialCountLightOn && processedSerialCount > 5) {
+      processedSerialCountLightOn = false;
+      star.setPixelColor(0, 0, 0, 0);
+      star.show();
+    }
+    #endif
 }
 
 // The background loop!
