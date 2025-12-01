@@ -21,13 +21,14 @@ Serial Light Organ
 */
 
 // This MUST match the baud rate in the filter file
-#define SERIAL_BAUD 250000
+//#define SERIAL_BAUD 250000
+#define SERIAL_BAUD 4800
 
 // Debugging serial prints
 // Plot sample, processed sample, and tops/lows for the given band
 //#define DEBUGGING_PLOT_LIGHT 2
 // Echo what comes across Serial1
-//#define DEBUGGING_SERIAL1_READ
+#define DEBUGGING_SERIAL1_READ
 //#define DEBUGGING_CURRENT_SAMPLE
 
 // pixel strip / light show config

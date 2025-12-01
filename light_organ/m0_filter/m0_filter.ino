@@ -85,7 +85,8 @@ Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 #define sampleRate 20000
 
 // This MUST match the baud rate in the lighting file
-#define SERIAL_BAUD 250000
+//#define SERIAL_BAUD 250000
+#define SERIAL_BAUD 4800
 
 // after adding additional filters these seemed to need to double to reach the desired frequency
 //            Hz
@@ -133,7 +134,8 @@ volatile int32_t *firc = fir1c;
 volatile int32_t *fird = fir1d;
 
 // Main working variables, current sample and current output
-volatile uint32_t s, oa, ob, oc, od;
+volatile uint32_t s;
+volatile uint16_t  oa, ob, oc, od; // the clamped values will be between 0 and 1023, only need 2 bytes
 /*
 // Gain
 volatile uint32_t gain = 0;
@@ -343,7 +345,7 @@ void setup() {
   next_idx = 0;
 
   // We use 10 bits for the DAC and ADC hardware
-  analogWriteResolution(10);
+//  analogWriteResolution(10);/
   analogReadResolution(10);
 
   // Dummy reads and writes to get all pin muxes and modes correctly set (by the Arduino libraries)
@@ -435,7 +437,7 @@ void TC5_Handler (void)
   TC5->COUNT16.INTFLAG.bit.MC0 = 1;
 }
 
-uint32_t clamp_output(int32_t o2)
+uint16_t clamp_output(int32_t o2)
 {
   if(o2 < -511) {
     return(0);
@@ -567,7 +569,11 @@ void sample_event()
   od = clamp_output(o2d);
   
   // The DAC will be updated at the start of the next interrupt to minimize jitter
-
+/*
+ * The additional checks were slowing this function down way too much. Commenting this block out sped up the debug blue blink to about 1.5s
+ * from ~4s blink for every 100 serial writes.
+ * Also for this project, if we're hitting saturation on any band we'll be able to see it as that whole band should
+ * light up on the LED strip
   // Detect if we are near to clipping/overdrive
   // The tick counters shows how long time ago we last had problems
   if(oa > OUTPUT_ERROR_LEVEL_HIGH || oa < OUTPUT_ERROR_LEVEL_LOW ||
@@ -592,7 +598,7 @@ void sample_event()
     if(output_warning_ticks > 65000)
       output_warning_ticks = 65000;
   }
-
+*/
 
   // Store the new input sample in the buffers
   // (must be done after the whole FIR is calculated)
@@ -626,8 +632,9 @@ void sample_event()
 
   // The preset should be overkill as we don't change it. probably can comment it out.
   // Pre-set MUX to A1 so that we can start sampling immediately at next interrupt
-  ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[A1].ulADCChannelNumber;
-  ADC_SYNC();
+  //ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[A1].ulADCChannelNumber;
+  //ADC_SYNC();
+  // The above also seemed to cause the ADC reads to slow a bit
 
   // Keep track of timing for debugging purposes.
   #ifdef DEBUG
@@ -637,6 +644,7 @@ void sample_event()
 }
 
 void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band) {
+/*
   Serial1.print(lowest_band);
   Serial1.print(',');
   Serial1.print(mid_band);
@@ -645,7 +653,10 @@ void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t hig
   Serial1.print(',');
   Serial1.print(highest_band);
   Serial1.println();
-
+*/
+  Serial1.println('?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
+  Serial.println("Writes:" + '?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
+  
     #ifdef MONITOR_SERIAL_WRITES
     processedSerialCount++;
     if(processedSerialCount > 100) {
@@ -737,13 +748,13 @@ void loop() {
   // get the best quality output audio.
   if(output_error_ticks < 2000) {
     // We have seen error conditions during the last 0.1s
-    star.setPixelColor(0, 255, 0, 0);  // Angry red color on RGB LED
+//    star.setPixelColor(0, 255, 0, 0);  // Angry red color on RGB LED
   } else if(output_warning_ticks < 2000) {
     // We have seen warning conditions during the last 0.1s
-    star.setPixelColor(0, 191, 191, 0);  // Yellow color
+//   star.setPixelColor(0, 191, 191, 0);  // Yellow color
   } else {
     // All ok, switch the LEDs off to avoid interference on the input
-    star.setPixelColor(0, 0, 0, 0);  // All off, dark means good signal
+  //  star.setPixelColor(0, 0, 0, 0);  // All off, dark means good signal
   }
   star.show();
 
