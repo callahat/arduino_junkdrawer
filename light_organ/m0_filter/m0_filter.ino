@@ -86,7 +86,7 @@ Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 
 // This MUST match the baud rate in the lighting file
 //#define SERIAL_BAUD 250000
-#define SERIAL_BAUD 4800
+#define SERIAL_BAUD 115200
 
 // after adding additional filters these seemed to need to double to reach the desired frequency
 //            Hz
@@ -644,7 +644,8 @@ void sample_event()
 }
 
 void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band) {
-/*
+
+  Serial1.print('?');
   Serial1.print(lowest_band);
   Serial1.print(',');
   Serial1.print(mid_band);
@@ -652,10 +653,22 @@ void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t hig
   Serial1.print(high_band);
   Serial1.print(',');
   Serial1.print(highest_band);
+  Serial1.print('!');
   Serial1.println();
-*/
-  Serial1.println('?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
-  Serial.println("Writes:" + '?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
+  
+  Serial.print('?');
+  Serial.print(lowest_band);
+  Serial.print(',');
+  Serial.print(mid_band);
+  Serial.print(',');
+  Serial.print(high_band);
+  Serial.print(',');
+  Serial.print(highest_band);
+  Serial.print('!');
+  Serial.println();
+
+//  Serial1.println('?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
+//  Serial.println("Writes:" + '?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
   
     #ifdef MONITOR_SERIAL_WRITES
     processedSerialCount++;

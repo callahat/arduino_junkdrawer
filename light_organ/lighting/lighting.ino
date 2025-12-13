@@ -22,7 +22,7 @@ Serial Light Organ
 
 // This MUST match the baud rate in the filter file
 //#define SERIAL_BAUD 250000
-#define SERIAL_BAUD 4800
+#define SERIAL_BAUD 115200
 
 // Debugging serial prints
 // Plot sample, processed sample, and tops/lows for the given band
