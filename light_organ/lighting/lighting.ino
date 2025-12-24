@@ -22,7 +22,7 @@ Serial Light Organ
 
 // This MUST match the baud rate in the filter file
 //#define SERIAL_BAUD 250000
-#define SERIAL_BAUD 115200
+#define SERIAL_BAUD 19200
 
 // Debugging serial prints
 // Plot sample, processed sample, and tops/lows for the given band
@@ -95,7 +95,6 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ
 Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 
 char serialBuffer[100];
-size_t l;
 
 // byte iSample, iBuff;
 
@@ -120,63 +119,119 @@ void setup() {
 }
 
 void loop() {
-  readSerialData();
-  parseSerialData();
+  readByte();
+  processBytePair();
   updateLightStrip();
 }
 
-void readSerialData() {
-  if(Serial1.available()) {
-    l = Serial1.readBytesUntil('\n', serialBuffer, 100);
-    serialBuffer[l+1] = 0;
-    
+
+#define FIRST_POSITION_BIT  1 << 7   // the bit indicating if the data byte is the first or second of the pair
+#define SECOND_POSITION_BIT 0 << 7
+#define LOW_BAND_BITS       0 << 5   // the two bits indicating what band the data byte is for
+#define MID_BAND_BITS       1 << 5
+#define HIGH_BAND_BITS      2 << 5
+#define HIGHEST_BAND_BITS   3 << 5
+#define BAND_MASK HIGHEST_BAND_BITS  // Mask for the bits indicating the band
+#define FIVE_BIT_MASK 31                // Mask for the power level segment for the data byte
+
+#define BYTE_BUFFER_LEN 64
+#define BYTE_BUFFER_MASK BYTE_BUFFER_LEN - 1
+
+uint8_t byteBuffer[BYTE_BUFFER_LEN];
+uint8_t byteBufferWritePos = 0;
+uint8_t byteBufferToProcess = 0;
+uint8_t byteBufferFresh = 0;
+
+void readByte() {
+  while(Serial1.available() > 0) {
+    byteBuffer[byteBufferWritePos] = Serial1.read();
+
+
+   /* 
     #ifdef DEBUGGING_SERIAL1_READ
     Serial.print("Read:");
-    Serial.println(serialBuffer);
-    #endif
+    Serial.println(256 | byteBuffer[byteBufferWritePos], BIN);
+    #endif  
+    */
     
     #ifdef MONITOR_SERIAL_READS
     processedSerialCount++;
-    if(processedSerialCount > 100) {
-      Serial.println("ON");
+    if(processedSerialCount > 400) {
       processedSerialCount = 0;
       processedSerialCountLightOn = true;
       star.setPixelColor(0, 0, 0, 255);
       star.show();
     } else if(processedSerialCountLightOn && processedSerialCount > 5) {
-      Serial.println("OFF");
       processedSerialCountLightOn = false;
       star.setPixelColor(0, 0, 0, 0);
       star.show();
     }
     #endif
+
+    byteBufferFresh++;
+    byteBufferWritePos++;
+    byteBufferWritePos &= BYTE_BUFFER_MASK;
   }
 }
 
-void parseSerialData() {
-  byte iSample = 0;
-  byte iBuff = 0;
+void processBytePair() {
+  byte iBandNum;
+  uint16_t tmpSample;
 
-  int tmpSample;
+  if(byteBufferFresh > 1) {
+    if((byteBuffer[byteBufferToProcess] & FIRST_POSITION_BIT) == FIRST_POSITION_BIT) {
+      //Serial.println("Found first byte");
+      //Serial.println("Adjacent bytes:");
+      //Serial.println(256 | byteBuffer[byteBufferToProcess], BIN);
+      //Serial.println(256 | byteBuffer[byteBufferToProcess + 1], BIN);
+      if((byteBuffer[byteBufferToProcess + 1] & FIRST_POSITION_BIT) == 0) {
+        //Serial.println("got a first, second byte in order");
+        iBandNum = byteBuffer[byteBufferToProcess] & BAND_MASK;
+        
+        // A first and second byte have been found in order
+        if(iBandNum == (byteBuffer[byteBufferToProcess + 1] & BAND_MASK)) {
+          // Its a match, these two bytes most likely correlate to the upper and lower 5 bits of the band
+          iBandNum = iBandNum >> 5;
+          //Serial.print("bytes are for same band: ");
+          //Serial.println(iBandNum);
 
-  while(serialBuffer[iBuff] != 0 && iSample < 4 && iBuff < 100) {
-    tmpSample = 0;
-    
-    while(serialBuffer[iBuff] != ',' && serialBuffer[iBuff] != 0) {
-      if(serialBuffer[iBuff] >= '0' and serialBuffer[iBuff] <= '9') {
-        tmpSample *= 10;
-        tmpSample += serialBuffer[iBuff] - '0';
+          tmpSample = ((byteBuffer[byteBufferToProcess] & FIVE_BIT_MASK) << 5) |
+            (byteBuffer[byteBufferToProcess + 1] & FIVE_BIT_MASK);
+
+          //Serial.println("calcualted sample: ");
+          //Serial.println(256 | (byteBuffer[byteBufferToProcess]), BIN);
+          //Serial.println(256 | (byteBuffer[byteBufferToProcess + 1]), BIN);
+          //Serial.println(tmpSample);
+          if(iBandNum == 3) {
+            currentSample[iBandNum] = 1023;
+          } else if(tmpSample > 0 && tmpSample < 1023) { 
+            currentSample[iBandNum] = tmpSample;
+          }
+        }
+
+        byteBufferFresh -= 2;
+        byteBufferToProcess += 2;
       }
-
-      iBuff++;
+    } else {
+      // a second byte was encountered, advance the next to process in the buffer by one
+      byteBufferFresh--;
+      byteBufferToProcess++;
     }
-    iBuff++;
-
-    if(tmpSample > 0 && tmpSample < 1023) { 
-      currentSample[iSample] = tmpSample;
-    }
-    iSample++;
+    // ensure the working index stays within the array bounds
+    byteBufferToProcess &= BYTE_BUFFER_MASK;
   }
+
+  // wrap in a debugging ifdef
+  Serial.print(currentSample[3]+512);
+  Serial.print("\t");
+  Serial.print(currentSample[2]+384);
+  Serial.print("\t");
+  Serial.print(currentSample[1]+256);
+  Serial.print("\t");
+  Serial.print(currentSample[0]+128);
+  Serial.print("\t384\t1128");
+  Serial.println();
+  // end ifdef debug wrapper
 }
 
 int processSample(byte i, int absy) {

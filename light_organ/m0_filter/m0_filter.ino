@@ -86,7 +86,7 @@ Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 
 // This MUST match the baud rate in the lighting file
 //#define SERIAL_BAUD 250000
-#define SERIAL_BAUD 115200
+#define SERIAL_BAUD 19200
 
 // after adding additional filters these seemed to need to double to reach the desired frequency
 //            Hz
@@ -309,7 +309,7 @@ void prepare_fir(int32_t *fir, float freq1, float freq2) {
 // Init routine, run once after boot
 void setup() {
 #if defined(PLOTTER) || defined(MONITOR) || defined(DEBUG)
-  Serial.begin(SERIAL_BAUD);
+  Serial.begin(4800);
 #endif
   Serial1.begin(SERIAL_BAUD);
   // Start by initialize the DotStar RGB and switch it off.
@@ -643,33 +643,65 @@ void sample_event()
   #endif
 }
 
-void printFrequencyOverSerial(int32_t lowest_band, int32_t mid_band, int32_t high_band, int32_t highest_band) {
+#define FIRST_POSITION_BIT  1 << 7
+#define SECOND_POSITION_BIT 0 << 7
+#define LOW_BAND_BITS       0 << 5
+#define MID_BAND_BITS       1 << 5
+#define HIGH_BAND_BITS      2 << 5
+#define HIGHEST_BAND_BITS   3 << 5
 
-  Serial1.print('?');
-  Serial1.print(lowest_band);
-  Serial1.print(',');
-  Serial1.print(mid_band);
-  Serial1.print(',');
-  Serial1.print(high_band);
-  Serial1.print(',');
-  Serial1.print(highest_band);
-  Serial1.print('!');
-  Serial1.println();
-  
-  Serial.print('?');
-  Serial.print(lowest_band);
-  Serial.print(',');
-  Serial.print(mid_band);
-  Serial.print(',');
-  Serial.print(high_band);
-  Serial.print(',');
-  Serial.print(highest_band);
-  Serial.print('!');
-  Serial.println();
+#define BYTE_BIT_MASK 31
 
-//  Serial1.println('?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
-//  Serial.println("Writes:" + '?' + String(lowest_band) + ',' + String(mid_band) + ',' + String(high_band) + ',' + String(highest_band) + '!');
-  
+void printFrequencyOverSerial(uint16_t lowest_band, uint16_t mid_band, uint16_t high_band, uint16_t highest_band) {
+  /*
+   * The bands themselves range from 0 to 1023, which means only 10 bits are needed for the power level, 
+   * leaving 6 bytes for other data. We can send two bytes for each band:
+   *   bit       description
+   *   7         1 - indicates this byte contains the upper 5 bits of the power
+   *             0 - indicates this byte contains the lower 5 bits of the power
+   *   6,5       The band number (zero indexed, 0 through 3)
+   *   4,3,2,1,0 The power level
+   */
+
+   // 31 is the mask for five bits, zero out anything higher
+   // write to write as a byte and not a human readable character
+   Serial1.write(FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK));
+
+   Serial1.write(FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK));
+
+   Serial1.write(FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK));
+
+   Serial1.write(FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK));
+
+   // print to the debug serial window the binary of whats sent
+   Serial.print("BAND:");
+   Serial.println(256 | LOW_BAND_BITS);
+   Serial.print("Write:");
+   Serial.print(lowest_band);
+   Serial.print(" bytes: ");
+   Serial.println(256 | FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK), BIN);
+   Serial.print("Write:");
+   Serial.println(256 | SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK), BIN);
+
+   Serial.print("Write:");
+   Serial.println(256 | FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK), BIN);
+   Serial.print("Write:");
+   Serial.println(256 | SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK), BIN);
+
+   Serial.print("Write:");
+   Serial.println(256 | FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK), BIN);
+   Serial.print("Write:");
+   Serial.println(256 | SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK), BIN);
+
+   Serial.print("Write:");
+   Serial.println(256 | FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK), BIN);
+   Serial.print("Write:");
+   Serial.println(256 | SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK), BIN);
+
     #ifdef MONITOR_SERIAL_WRITES
     processedSerialCount++;
     if(processedSerialCount > 100) {
