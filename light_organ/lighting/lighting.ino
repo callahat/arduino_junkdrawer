@@ -21,20 +21,19 @@ Serial Light Organ
 */
 
 // This MUST match the baud rate in the filter file
-//#define SERIAL_BAUD 250000
 #define SERIAL_BAUD 19200
 
 // Debugging serial prints
 // Plot sample, processed sample, and tops/lows for the given band
-//#define DEBUGGING_PLOT_LIGHT 2
+//#define DEBUG_PLOT_LIGHT 2
 // Echo what comes across Serial1
-#define DEBUGGING_SERIAL1_READ
-//#define DEBUGGING_CURRENT_SAMPLE
+//#define DEBUG_SERIAL1_READ
+//#define PLOTTER 1
 
 // pixel strip / light show config
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
-//#define N_PIXELS  8  // Number of pixels you are using
-#define N_PIXELS  100  // Pebble strand
+//#define N_PIXELS  8  // Number of pixels you are using, 8 for bar/stick
+#define N_PIXELS  100  // Pebble strand (~30m) has 100 pixels
 #define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
 
 /* Averaging the last X samples to produce a smoother graph of LED intensities,
@@ -45,7 +44,7 @@ Serial Light Organ
  */
 //#define USE_AVERAGE_SAMPLING // Comment this out to disable averaging the samples to get a smoother graph
 #define LSAMPLES 8    //rotating buffer size, power of 2 makes for easy average
-#define LSAMPLE_SHIFT_DIVIDER 3    // 2^n = LSAMPLES
+#define LSAMPLE_SHIFT_DIVIDER 2    // 2^n = LSAMPLES
 #define LSAMPLES_MASK LSAMPLES - 1 // A quick way to enforce a rolling incremented index
 
 // Effectively use these to throw out low amplitude "noise"
@@ -54,7 +53,7 @@ Serial Light Organ
 // Setting the LOW dampener higher will cut out queiter noises from lighting up the band 
 #define LOWS_DAMPEN_SHIFTER 4
 // Setting the TOP Dampener higher will skew the band in the more "light up" direction
-#define TOPS_DAMPEN_SHIFTER 4
+#define TOPS_DAMPEN_SHIFTER 1
 
 // How many levels of brightness per pixel. Each band is divided into pixels with levels of brightness.
 // Should be a power of two for faster division via bit shifting
@@ -65,7 +64,7 @@ Serial Light Organ
 #define MAX_LVL 512
 #define MIN_LVL 0
 // Don't let the relative high/low decay to the point where even very quiet is filling up the whole light band
-#define MIN_LVL_DIFF 64
+#define MIN_LVL_DIFF 128
 // Decay and rate for the local high levels; allows the MAX to slide down so that
 // for quieter sounds the full band can still light up all the way for a relative peak
 #define DECAY_MS 500
@@ -86,17 +85,13 @@ int lows[4] = {MAX_LVL, MAX_LVL, MAX_LVL, MAX_LVL};
 
 #include <Adafruit_NeoPixel.h>
 // 8 neopixel strip setup
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+//Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 // Pebble strand setup
-// Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
+Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
 
 #include <Adafruit_DotStar.h>
 // Init DotStar module
 Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
-
-char serialBuffer[100];
-
-// byte iSample, iBuff;
 
 #define MONITOR_SERIAL_READS 1
 #ifdef MONITOR_SERIAL_READS
@@ -132,7 +127,7 @@ void loop() {
 #define HIGH_BAND_BITS      2 << 5
 #define HIGHEST_BAND_BITS   3 << 5
 #define BAND_MASK HIGHEST_BAND_BITS  // Mask for the bits indicating the band
-#define FIVE_BIT_MASK 31                // Mask for the power level segment for the data byte
+#define FIVE_BIT_MASK 31             // Mask for the power level segment for the data byte
 
 #define BYTE_BUFFER_LEN 64
 #define BYTE_BUFFER_MASK BYTE_BUFFER_LEN - 1
@@ -146,17 +141,9 @@ void readByte() {
   while(Serial1.available() > 0) {
     byteBuffer[byteBufferWritePos] = Serial1.read();
 
-
-   /* 
-    #ifdef DEBUGGING_SERIAL1_READ
-    Serial.print("Read:");
-    Serial.println(256 | byteBuffer[byteBufferWritePos], BIN);
-    #endif  
-    */
-    
     #ifdef MONITOR_SERIAL_READS
     processedSerialCount++;
-    if(processedSerialCount > 400) {
+    if(processedSerialCount > 800) {
       processedSerialCount = 0;
       processedSerialCountLightOn = true;
       star.setPixelColor(0, 0, 0, 255);
@@ -180,31 +167,37 @@ void processBytePair() {
 
   if(byteBufferFresh > 1) {
     if((byteBuffer[byteBufferToProcess] & FIRST_POSITION_BIT) == FIRST_POSITION_BIT) {
-      //Serial.println("Found first byte");
-      //Serial.println("Adjacent bytes:");
-      //Serial.println(256 | byteBuffer[byteBufferToProcess], BIN);
-      //Serial.println(256 | byteBuffer[byteBufferToProcess + 1], BIN);
+      #ifdef DEBUG_SERIAL1_READ
+        Serial.println("Found first byte");
+        Serial.println("Adjacent bytes:");
+        Serial.println(256 | byteBuffer[byteBufferToProcess], BIN);
+        Serial.println(256 | byteBuffer[byteBufferToProcess + 1], BIN);
+      #endif
       if((byteBuffer[byteBufferToProcess + 1] & FIRST_POSITION_BIT) == 0) {
-        //Serial.println("got a first, second byte in order");
+        #ifdef DEBUG_SERIAL1_READ
+          Serial.println("got a first, second byte in order");
+        #endif
         iBandNum = byteBuffer[byteBufferToProcess] & BAND_MASK;
         
         // A first and second byte have been found in order
         if(iBandNum == (byteBuffer[byteBufferToProcess + 1] & BAND_MASK)) {
           // Its a match, these two bytes most likely correlate to the upper and lower 5 bits of the band
           iBandNum = iBandNum >> 5;
-          //Serial.print("bytes are for same band: ");
-          //Serial.println(iBandNum);
+          #ifdef DEBUG_SERIAL1_READ
+            Serial.print("bytes are for same band: ");
+            Serial.println(iBandNum);
+          #endif
 
           tmpSample = ((byteBuffer[byteBufferToProcess] & FIVE_BIT_MASK) << 5) |
             (byteBuffer[byteBufferToProcess + 1] & FIVE_BIT_MASK);
 
-          //Serial.println("calcualted sample: ");
-          //Serial.println(256 | (byteBuffer[byteBufferToProcess]), BIN);
-          //Serial.println(256 | (byteBuffer[byteBufferToProcess + 1]), BIN);
-          //Serial.println(tmpSample);
-          if(iBandNum == 3) {
-            currentSample[iBandNum] = 1023;
-          } else if(tmpSample > 0 && tmpSample < 1023) { 
+          #ifdef DEBUG_SERIAL1_READ
+            Serial.println("calcualted sample: ");
+            Serial.println(256 | (byteBuffer[byteBufferToProcess]), BIN);
+            Serial.println(256 | (byteBuffer[byteBufferToProcess + 1]), BIN);
+            Serial.println(tmpSample);
+          #endif
+          if(tmpSample > 0 && tmpSample < 1023) {
             currentSample[iBandNum] = tmpSample;
           }
         }
@@ -221,7 +214,7 @@ void processBytePair() {
     byteBufferToProcess &= BYTE_BUFFER_MASK;
   }
 
-  // wrap in a debugging ifdef
+  #ifdef PLOTTER
   Serial.print(currentSample[3]+512);
   Serial.print("\t");
   Serial.print(currentSample[2]+384);
@@ -231,7 +224,7 @@ void processBytePair() {
   Serial.print(currentSample[0]+128);
   Serial.print("\t384\t1128");
   Serial.println();
-  // end ifdef debug wrapper
+  #endif
 }
 
 int processSample(byte i, int absy) {
@@ -258,7 +251,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
 
   int sample = processSample(i, absy);
 
-  // attempt 
+  // attempt
   if(sample > tops[i]) {
     tops[i] = sample;
   } 
@@ -281,8 +274,8 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   // quiet samples). 
   int lvl = map(sample>>LOWS_DAMPEN_SHIFTER, lows[i]>>LOWS_DAMPEN_SHIFTER, tops[i]>>TOPS_DAMPEN_SHIFTER, 0, TOP*LVLS_PER_PIXEL);
   
-  #ifdef DEBUGGING_PLOT_LIGHT
-  if(i == DEBUGGING_PLOT_LIGHT){
+  #ifdef DEBUG_PLOT_LIGHT
+  if(i == DEBUG_PLOT_LIGHT){
   Serial.print(0);
   Serial.print("\t");
   Serial.print(512);
@@ -296,11 +289,18 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   Serial.println(sample);
   }
   #endif
-  
+
   for(int ix=0; ix < TOP; ix++){
-    rem = lvl & PIXEL_REMAINDER; // remainder
-    lvl >>= PIXEL_SHIFT_DIVIDER;      // divide by 16 
-    if(lvl > 0) { rem = PIXEL_REMAINDER; }
+    if(lvl <= 0) {
+      rem = 0;
+    } else {
+      if(lvl > PIXEL_REMAINDER) {
+        rem = PIXEL_REMAINDER;
+      } else {
+        rem = lvl;
+      }
+      lvl -= PIXEL_SHIFT_DIVIDER;
+    }
 
     strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
   }
@@ -323,17 +323,6 @@ void updateLightStrip()
   #ifdef USE_AVERAGE_SAMPLING
   lSampleIndex += 1;
   lSampleIndex &= LSAMPLES_MASK;
-  #endif
-  #ifdef DEBUGGING_CURRENT_SAMPLE
-  Serial.print("current_sample:");
-  Serial.print(currentSample[0]);
-  Serial.print(",");
-  Serial.print(currentSample[1]);
-  Serial.print(",");
-  Serial.print(currentSample[2]);
-  Serial.print(",");
-  Serial.print(currentSample[3]);
-  Serial.println();
   #endif
 
   set_band_color(0, currentSample[0], 10, 0, 0);  // low

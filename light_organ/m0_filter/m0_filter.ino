@@ -68,8 +68,9 @@ diodes are highly recommended. Potentiomenters are typically linear 10kOhm
 #define VERSION "1.3"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
-// #define PLOTTER 1
+#define PLOTTER 1
 // #define MONITOR 1
+// #define MONITOR_SERIAL_DATA 1
 // #define DEBUG 1
 
 #include <Adafruit_DotStar.h>
@@ -158,7 +159,6 @@ volatile uint32_t output_warning_ticks = 65000;
 #ifdef DEBUG
   volatile unsigned long timing = 0, last_timing = 0, interrupt_timing = 0;
 #endif
-
 
 #define MONITOR_SERIAL_WRITES 1
 #ifdef MONITOR_SERIAL_WRITES
@@ -309,7 +309,7 @@ void prepare_fir(int32_t *fir, float freq1, float freq2) {
 // Init routine, run once after boot
 void setup() {
 #if defined(PLOTTER) || defined(MONITOR) || defined(DEBUG)
-  Serial.begin(4800);
+  Serial.begin(9600);
 #endif
   Serial1.begin(SERIAL_BAUD);
   // Start by initialize the DotStar RGB and switch it off.
@@ -653,7 +653,7 @@ void sample_event()
 #define BYTE_BIT_MASK 31
 
 void printFrequencyOverSerial(uint16_t lowest_band, uint16_t mid_band, uint16_t high_band, uint16_t highest_band) {
-  /*
+  /* 
    * The bands themselves range from 0 to 1023, which means only 10 bits are needed for the power level, 
    * leaving 6 bytes for other data. We can send two bytes for each band:
    *   bit       description
@@ -670,37 +670,39 @@ void printFrequencyOverSerial(uint16_t lowest_band, uint16_t mid_band, uint16_t 
 
    Serial1.write(FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK));
    Serial1.write(SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK));
-
+   
    Serial1.write(FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK));
    Serial1.write(SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK));
-
+   
    Serial1.write(FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK));
    Serial1.write(SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK));
 
-   // print to the debug serial window the binary of whats sent
-   Serial.print("BAND:");
-   Serial.println(256 | LOW_BAND_BITS);
-   Serial.print("Write:");
-   Serial.print(lowest_band);
-   Serial.print(" bytes: ");
-   Serial.println(256 | FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK), BIN);
-   Serial.print("Write:");
-   Serial.println(256 | SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK), BIN);
+    #ifdef MONITOR_SERIAL_DATA
+    // print to the debug serial window the binary of whats sent
+    Serial.println("BAND: lowest");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK), BIN);
 
-   Serial.print("Write:");
-   Serial.println(256 | FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK), BIN);
-   Serial.print("Write:");
-   Serial.println(256 | SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK), BIN);
+    Serial.println("BAND: mid");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK), BIN);
+   
+    Serial.println("BAND: high");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK), BIN);
 
-   Serial.print("Write:");
-   Serial.println(256 | FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK), BIN);
-   Serial.print("Write:");
-   Serial.println(256 | SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK), BIN);
-
-   Serial.print("Write:");
-   Serial.println(256 | FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK), BIN);
-   Serial.print("Write:");
-   Serial.println(256 | SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK), BIN);
+    Serial.println("BAND: highest");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK), BIN);
+    #endif
 
     #ifdef MONITOR_SERIAL_WRITES
     processedSerialCount++;
