@@ -245,8 +245,6 @@ int processSample(byte i, int absy) {
 void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
 {
   int lowAdjust = 0;
-  int rem;
-  int itop = i * TOP; // starting pixel for this band
 
   int absy = abs(MAX_LVL-y);
 
@@ -291,20 +289,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   }
   #endif
 
-  for(int ix=0; ix < TOP; ix++){
-    if(lvl <= 0) {
-      rem = 0;
-    } else {
-      if(lvl > PIXEL_REMAINDER) {
-        rem = PIXEL_REMAINDER;
-      } else {
-        rem = lvl;
-      }
-      lvl -= PIXEL_SHIFT_DIVIDER;
-    }
-
-    strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
-  }
+  colorBand(i, lvl, r, g, b);
 }
 
 // power readings from the four bands we are filtering into
@@ -331,4 +316,27 @@ void updateLightStrip()
   set_band_color(2, currentSample[2], 0, 0, 10);  // high
   set_band_color(3, currentSample[3], 10, 0, 10); // highest
   strip.show();
+}
+
+// Methods for coloring or mapping the bands
+
+// Basic linear mapping where the bands are divided into 4 sections,
+// the higher the lvl the more pixels are activated.
+int rem, itop, ix;
+void colorBand(int i, int lvl, uint8_t r, uint8_t g, uint8_t b) {
+  int itop = i * TOP; // starting pixel for this band
+  for(int ix=0; ix < TOP; ix++){
+    if(lvl <= 0) {
+      rem = 0;
+    } else {
+      if(lvl > PIXEL_REMAINDER) {
+        rem = PIXEL_REMAINDER;
+      } else {
+        rem = lvl;
+      }
+      lvl -= PIXEL_SHIFT_DIVIDER;
+    }
+
+    strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
+  }
 }
