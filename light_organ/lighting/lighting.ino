@@ -23,12 +23,14 @@ Serial Light Organ
 // This MUST match the baud rate in the filter file
 #define SERIAL_BAUD 19200
 
-// Debugging serial prints
+// Debugging defines ----------------------------------------------------
 // Plot sample, processed sample, and tops/lows for the given band
 //#define DEBUG_PLOT_LIGHT 2
 // Echo what comes across Serial1
 //#define DEBUG_SERIAL1_READ
 //#define PLOTTER 1
+// blink the dotstar for every 800 bytes read
+#define MONITOR_SERIAL_READS 1
 
 // pixel strip / light show config
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
@@ -93,7 +95,6 @@ Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ8
 // Init DotStar module
 Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
 
-#define MONITOR_SERIAL_READS 1
 #ifdef MONITOR_SERIAL_READS
 int processedSerialCount = 0;
 bool processedSerialCountLightOn = false;
