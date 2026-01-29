@@ -289,7 +289,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   }
   #endif
 
-  colorBand(i, lvl, r, g, b);
+  colorBand2(i, lvl, r, g, b);
 }
 
 // power readings from the four bands we are filtering into
@@ -338,5 +338,60 @@ void colorBand(int i, int lvl, uint8_t r, uint8_t g, uint8_t b) {
     }
 
     strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
+  }
+}
+
+// Low Mid High Highest
+uint8_t bandLevels[4] = {3, 3, 2, 2};
+uint8_t pixelsPerLevel[4][3] = {
+    {4, 4, 6},
+    {3, 4, 6},
+    {4, 6, 0},
+    {4, 6, 0}
+  };
+uint8_t pixelMapping[4][3][6] = {
+  { // low
+    {40, 44, 46, 42, 0, 0},        // level 1
+    {26, 27, 34, 35, 0, 0},        // level 2
+    {9, 10, 11, 21, 22, 23}  // level 3
+  },
+  { // mid
+    {41, 43, 45, 0, 0, 0},      // level 1
+    {24, 25, 32, 33, 0, 0}, // level 2
+    {0, 1, 2, 12, 13, 14} // level 3
+  },
+  { // high
+    {30, 31, 38, 39, 0, 0},     // level 1
+    {3, 4, 5, 15, 16, 17} // level 2
+  },
+  { // highest
+    {28, 29, 36, 37, 0, 0},     // level 1
+    {6, 7, 8, 18, 19, 20} // level 2
+  }
+};
+int bLevels, lPixels;
+void colorBand2(int i, int lvl, uint8_t r, uint8_t g, uint8_t b) {
+  Serial.println("Colorband2");
+  Serial.print(i);
+  //bLevels = bandLevels[i];
+  for(int iLevel=0; iLevel < bandLevels[i]; iLevel++){
+    if(lvl <= 0) {
+      rem = 0;
+    } else {
+      if(lvl > PIXEL_REMAINDER) {
+        rem = PIXEL_REMAINDER;
+      } else {
+        rem = lvl;
+      }
+      lvl -= PIXEL_SHIFT_DIVIDER;
+    }
+Serial.print(" iLevel: ");
+Serial.print(iLevel);
+Serial.println();
+   // lPixels = pixelsPerLevel[i][iLevel];
+    for(int iPixel=0; iPixel < pixelsPerLevel[i][iLevel]; iPixel++){
+    //for(int iPixel=0; iPixel < 3; iPixel++){
+      strip.setPixelColor(pixelMapping[i][iLevel][iPixel], rem * r, rem * g, rem * b);
+    }
   }
 }
