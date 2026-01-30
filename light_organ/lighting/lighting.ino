@@ -53,15 +53,12 @@ Serial Light Organ
 // Should be adjusted lower when there are more pixels (need to check this, might need more dampening?) and
 //   lower when there are more samples averaged
 // Setting the LOW dampener higher will cut out queiter noises from lighting up the band 
-#define LOWS_DAMPEN_SHIFTER 4
-// Setting the TOP Dampener higher will skew the band in the more "light up" direction
-#define TOPS_DAMPEN_SHIFTER 1
+#define DAMPEN_SHIFTER 4
 
 // How many levels of brightness per pixel. Each band is divided into pixels with levels of brightness.
 // Should be a power of two for faster division via bit shifting
 #define LVLS_PER_PIXEL 16
 #define PIXEL_REMAINDER LVLS_PER_PIXEL - 1
-#define PIXEL_SHIFT_DIVIDER 3 // another power of two for a quick division
 
 #define MAX_LVL 512
 #define MIN_LVL 0
@@ -86,10 +83,10 @@ int tops[4] = {MIN_LVL, MIN_LVL, MIN_LVL, MIN_LVL};
 int lows[4] = {MAX_LVL, MAX_LVL, MAX_LVL, MAX_LVL}; 
 
 #include <Adafruit_NeoPixel.h>
-// 8 neopixel strip setup
-//Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+// neopixel setup
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 // Pebble strand setup
-Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
+//Adafruit_NeoPixel strip= Adafruit_NeoPixel(N_PIXELS, LED_PIN, NEO_BGR + NEO_KHZ800); // pebble coloring
 
 #include <Adafruit_DotStar.h>
 // Init DotStar module
@@ -101,7 +98,7 @@ bool processedSerialCountLightOn = false;
 #endif
 
 void setup() {
-  Serial.begin(SERIAL_BAUD);
+  Serial.begin(9600);
   Serial1.begin(SERIAL_BAUD);
 
   star.begin();
@@ -267,11 +264,6 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   }
   lows[i] -= lowAdjust;
   lows[i] = max(lows[i], 0);
-
-  // instead of 0 and 512 for the range of the map, use the lows and the tops to
-  // allow more of the band to be filled on relative loud samples (and have it be blank on relative
-  // quiet samples). 
-  int lvl = map(sample>>LOWS_DAMPEN_SHIFTER, lows[i]>>LOWS_DAMPEN_SHIFTER, tops[i]>>TOPS_DAMPEN_SHIFTER, 0, TOP*LVLS_PER_PIXEL);
   
   #ifdef DEBUG_PLOT_LIGHT
   if(i == DEBUG_PLOT_LIGHT){
@@ -289,7 +281,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   }
   #endif
 
-  colorBand2(i, lvl, r, g, b);
+  colorBand2(i, sample, r, g, b);
 }
 
 // power readings from the four bands we are filtering into
@@ -314,28 +306,24 @@ void updateLightStrip()
   set_band_color(0, currentSample[0], 10, 0, 0);  // low
   set_band_color(1, currentSample[1], 0, 10, 0);  // mid
   set_band_color(2, currentSample[2], 0, 0, 10);  // high
-  set_band_color(3, currentSample[3], 10, 0, 10); // highest
+  set_band_color(3, currentSample[3], 5, 0, 5); // highest
   strip.show();
 }
 
 // Methods for coloring or mapping the bands
+int lvl, rem;
 
 // Basic linear mapping where the bands are divided into 4 sections,
 // the higher the lvl the more pixels are activated.
-int rem, itop, ix;
-void colorBand(int i, int lvl, uint8_t r, uint8_t g, uint8_t b) {
+void colorBand(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
+  // instead of 0 and 512 for the range of the map, use the lows and the tops to
+  // allow more of the band to be filled on relative loud samples (and have it be blank on relative
+  // quiet samples).
+  lvl = map(sample>>DAMPEN_SHIFTER, lows[i]>>DAMPEN_SHIFTER, tops[i]>>DAMPEN_SHIFTER, 0, TOP*LVLS_PER_PIXEL);
+
   int itop = i * TOP; // starting pixel for this band
   for(int ix=0; ix < TOP; ix++){
-    if(lvl <= 0) {
-      rem = 0;
-    } else {
-      if(lvl > PIXEL_REMAINDER) {
-        rem = PIXEL_REMAINDER;
-      } else {
-        rem = lvl;
-      }
-      lvl -= PIXEL_SHIFT_DIVIDER;
-    }
+    calcRemAndLvl();
 
     strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
   }
@@ -370,28 +358,33 @@ uint8_t pixelMapping[4][3][6] = {
   }
 };
 int bLevels, lPixels;
-void colorBand2(int i, int lvl, uint8_t r, uint8_t g, uint8_t b) {
-  Serial.println("Colorband2");
-  Serial.print(i);
+void colorBand2(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
+  // instead of 0 and 512 for the range of the map, use the lows and the tops to
+  // allow more of the band to be filled on relative loud samples (and have it be blank on relative
+  // quiet samples).
+  lvl = map(sample>>DAMPEN_SHIFTER, lows[i]>>DAMPEN_SHIFTER, tops[i]>>DAMPEN_SHIFTER, 0, bandLevels[i]*LVLS_PER_PIXEL);
+
   //bLevels = bandLevels[i];
   for(int iLevel=0; iLevel < bandLevels[i]; iLevel++){
-    if(lvl <= 0) {
-      rem = 0;
-    } else {
-      if(lvl > PIXEL_REMAINDER) {
-        rem = PIXEL_REMAINDER;
-      } else {
-        rem = lvl;
-      }
-      lvl -= PIXEL_SHIFT_DIVIDER;
-    }
-Serial.print(" iLevel: ");
-Serial.print(iLevel);
-Serial.println();
+    calcRemAndLvl();
+
    // lPixels = pixelsPerLevel[i][iLevel];
     for(int iPixel=0; iPixel < pixelsPerLevel[i][iLevel]; iPixel++){
     //for(int iPixel=0; iPixel < 3; iPixel++){
       strip.setPixelColor(pixelMapping[i][iLevel][iPixel], rem * r, rem * g, rem * b);
     }
+  }
+}
+
+void calcRemAndLvl() {
+  if(lvl <= 0) {
+    rem = 0;
+  } else {
+    if(lvl > LVLS_PER_PIXEL) {
+      rem = LVLS_PER_PIXEL - 1;
+    } else {
+      rem = lvl;
+    }
+    lvl -= LVLS_PER_PIXEL;
   }
 }
