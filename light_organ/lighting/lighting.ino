@@ -18,6 +18,17 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 Serial Light Organ
 ==================
 
+A related program for creating a light organ that gets information about
+sound from a program running on a separate microcontroller.
+
+This program reads on Serial1 and uses that data to control PWM RGD LEDs.
+The data it reads consists of two byte pairs, ordered for each frequency
+band and containing the power level for a sample. Missing bytes or out of
+order bytes are thrown away (serail baud is not error free).
+
+The power level read in for a frequency band is dampened (to throw away quiet
+noise), and then used to calculate what lights will be activated.
+
 */
 
 // This MUST match the baud rate in the filter file
@@ -35,8 +46,12 @@ Serial Light Organ
 // pixel strip / light show config
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
 //#define N_PIXELS  8  // Number of pixels you are using, 8 for bar/stick
-#define N_PIXELS  100  // Pebble strand (~30m) has 100 pixels
-#define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
+#define N_PIXELS 47   // circular light show
+//#define N_PIXELS  100  // Pebble strand (~30m) has 100 pixels
+
+// Pick one of the lighting styles
+//#define USE_LINEAR_LIGHTING 1
+#define USE_MAPPED_LIGHTING 1
 
 /* Averaging the last X samples to produce a smoother graph of LED intensities,
  * LSAMPLES closer to zero can have more rapid bright/off switching strobe effect.
@@ -56,9 +71,7 @@ Serial Light Organ
 #define DAMPEN_SHIFTER 4
 
 // How many levels of brightness per pixel. Each band is divided into pixels with levels of brightness.
-// Should be a power of two for faster division via bit shifting
 #define LVLS_PER_PIXEL 16
-#define PIXEL_REMAINDER LVLS_PER_PIXEL - 1
 
 #define MAX_LVL 512
 #define MIN_LVL 0
@@ -281,7 +294,7 @@ void set_band_color(byte i, int32_t y, uint8_t r, uint8_t g, uint8_t b)
   }
   #endif
 
-  colorBand2(i, sample, r, g, b);
+  colorBand(i, sample, r, g, b);
 }
 
 // power readings from the four bands we are filtering into
@@ -313,8 +326,14 @@ void updateLightStrip()
 // Methods for coloring or mapping the bands
 int lvl, rem;
 
-// Basic linear mapping where the bands are divided into 4 sections,
-// the higher the lvl the more pixels are activated.
+#if defined USE_LINEAR_LIGHTING
+/* Basic linear mapping where the bands are divided into 4 sections,
+   the higher the lvl the more pixels are activated.
+   Ie, the louder the sound in that frequency band, the more pixels will
+   light up.
+ */
+#define TOP N_PIXELS / 4 // effectively number of pixels per band, number of pixels / 4 (since there are 4 bands)
+
 void colorBand(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
   // instead of 0 and 512 for the range of the map, use the lows and the tops to
   // allow more of the band to be filled on relative loud samples (and have it be blank on relative
@@ -328,15 +347,32 @@ void colorBand(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
     strip.setPixelColor(itop + ix, rem * r, rem * g, rem * b);
   }
 }
+#endif
 
-// Low Mid High Highest
+
+#if defined USE_MAPPED_LIGHTING
+/* Low Mid High Highest
+ * These arrays are used to assist converting the pixelMapping to the neopixel strip.
+ * Instead of mapping levels to a single pixel, this approach groups pixels together.
+ * This can be useful for controlling more complex patterns such as lighting up
+ * rings of neopixels or several pixels.
+ * As far as I can tell, the 0's for filler aren't necessary for the array to be created
+ * properly, but it looks nicer.
+ * The array indexes are (when present):
+ * 1 - the frequency band
+ * 2 - the set number
+ * 3 - the level number
+ */
+// For each of the frequency bands, how many set of pixels are in each one
 uint8_t bandLevels[4] = {4, 4, 3, 3};
+// How many pixels in each group level for each band
 uint8_t pixelsPerLevel[4][4] = {
     {4, 4, 2, 4},
     {3, 4, 2, 4},
     {4, 2, 4, 0},
     {4, 2, 4, 0}
   };
+// The actual mapping of pixels to groups to frequency bands
 uint8_t pixelMapping[4][4][6] = {
   { // low
     {40, 44, 46, 42, 0, 0}, // level 1
@@ -362,7 +398,7 @@ uint8_t pixelMapping[4][4][6] = {
   }
 };
 int bLevels, lPixels;
-void colorBand2(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
+void colorBand(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
   // instead of 0 and 512 for the range of the map, use the lows and the tops to
   // allow more of the band to be filled on relative loud samples (and have it be blank on relative
   // quiet samples).
@@ -379,7 +415,13 @@ void colorBand2(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
     }
   }
 }
+#endif
 
+/* Helper function, used in dividing the power level, by reducing lvl by LVLS_PER_PIXEL
+ *  and putting either the "max" or level into rem, which ever is smaller.
+ *  
+ *  lvl and rem change as a side effect.
+ */
 void calcRemAndLvl() {
   if(lvl <= 0) {
     rem = 0;

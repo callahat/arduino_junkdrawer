@@ -63,6 +63,21 @@ Pin 4 / A4 / (PA06) - Lower frequency potentiometer input
 
 The range for all pins are GND to VDD (3.3V). Analog input protection
 diodes are highly recommended. Potentiomenters are typically linear 10kOhm
+
+Modifications: callahat
+
+Added 3 additional lookup tables to support 4 separate bandpass filters,
+which are read and data is written in two paired bytes to Serial1
+to be read by a different trinket that controls PWM RGB LEDs.
+The second trinket was needed as a trinket M0 can only support one
+interrupt that fires at precise intervals. The filter needs to sample
+precisely 20000 times a second, and the LED library also needs to use
+precise interrupt for timing the PWM. Attempting to run both on the same
+trinket causes the sampling and the LED control to become incorrect, with
+the bandpass filtering no longer working correctly.
+
+Also removed the use of potentiometers and the changing of the ADC source, as
+only the mic pin is used. Analog output is also no longer used, nor is the gain.
 */
 
 #define VERSION "1.3"
@@ -117,9 +132,6 @@ float f5 = 15000;     // top of octave 9
 int32_t samples[FIR_LEN*2];
 int next_idx;
 
-// Double-buffered FIR tap arrays
-// int32_t fir1a[FIR_LEN_TABLE], fir2a[FIR_LEN_TABLE];
-// int32_t fir1b[FIR_LEN_TABLE], fir2b[FIR_LEN_TABLE];
 // Single buffering since they are calculate at startup
 int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE], fir1c[FIR_LEN_TABLE], fir1d[FIR_LEN_TABLE];
 
@@ -137,13 +149,7 @@ volatile int32_t *fird = fir1d;
 // Main working variables, current sample and current output
 volatile uint32_t s;
 volatile uint16_t  oa, ob, oc, od; // the clamped values will be between 0 and 1023, only need 2 bytes
-/*
-// Gain
-volatile uint32_t gain = 0;
 
-// Potentiometer sampling
-volatile uint32_t p_gain = 0, p_f1 = 0, p_f2 = 0;
-*/
 // Wait loop counters for ADC
 volatile uint32_t cnt; // , cnt2;
 
@@ -333,10 +339,6 @@ void setup() {
   // Prepare lookup tables
   prepare_hamming();
   prepare_sinus();
-
-  // Set up an initial FIR filter that blocks everything
-  //prepare_fir(fir1a, 0.0f, 0.0f);
-  //prepare_fir(fir1b, 0.0f, 0.0f);
   
   prepare_fir(fir1a, f1, f2);
   prepare_fir(fir1b, f2, f3);
@@ -345,16 +347,10 @@ void setup() {
   next_idx = 0;
 
   // We use 10 bits for the DAC and ADC hardware
-//  analogWriteResolution(10);/
   analogReadResolution(10);
 
   // Dummy reads and writes to get all pin muxes and modes correctly set (by the Arduino libraries)
   analogRead(A1);         // A1 / Pin 2 / PA09 as analog input of signal
-  // Not using POTs, or analog output. Planning to convert output to drive a strip of addressable LEDs
-  //analogRead(A2);         // A2 / Pin 0 / PA08 analog input, potentiometer 1, Frequency 2, top frequency
-  //analogRead(A3);         // A3 / Pin 3 / PA07 analog input, potentiometer 2, Gain (Volume)
-  //analogRead(A4);         // A4 / Pin 4 / PA06 analog input, potentiometer 3, Frequency 1, bottom frequency
-  //analogWrite(A0, 512);   // A0 / Pin 1 / PA02 as analog output of signal
 
   // Switch off pin 13 LED
   pinMode(13, OUTPUT);
@@ -503,25 +499,6 @@ void sample_event()
   s = ADC->RESULT.reg;
   ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;  // Clear the Data Ready flag
 
-  // Not using potentiometers
-  /*
-  // We also want to sample a potentiometer.
-  // Alternate between A2, A3 and A4
-  int p_pin;
-  static int p_sel = 0;
-  if(p_sel == 0) {
-      p_pin = A3;             // Gain
-  } else if(p_sel == 1) {
-      p_pin = A4;             // f1
-  } else {
-      p_pin = A2;             // f2
-  }
-
-  // Prepare the input MUX
-  ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[p_pin].ulADCChannelNumber;
-  ADC_SYNC();
-  */
-
   // Start ADC conversion, it will run in the background
   ADC->SWTRIG.bit.START = 1;
 
@@ -608,27 +585,6 @@ void sample_event()
   next_idx++;
   if(next_idx >= FIR_LEN)
     next_idx = 0;
-
-  // Again, not using the POTs
-  /*
-  // Follow up on potentiometer ADC conversion
-  cnt2 = 0;
-  while (ADC->INTFLAG.bit.RESRDY == 0) cnt2++;   // Waiting for conversion to complete
-  uint32_t p = ADC->RESULT.reg;
-  ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;  // Clear the Data Ready flag
-
-  // Store the sample in the correct variable, switch to the next input
-  if(p_sel == 0) {
-      p_gain = p;             // Gain
-      p_sel = 1;
-  } else if(p_sel == 1) {
-      p_f1 = p;               // f1
-      p_sel = 2;
-  } else {
-      p_f2 = p;               // f2
-      p_sel = 0;
-  }
-  */
 
   // The preset should be overkill as we don't change it. probably can comment it out.
   // Pre-set MUX to A1 so that we can start sampling immediately at next interrupt
@@ -725,64 +681,6 @@ void loop() {
   // Measure timing
   unsigned long loop_start_timer = micros();
   static unsigned long output_last_timer = 0;
-
-  /*
-  // Potientiometer input is filtered to remove noise.
-  // Accumulation buffers:
-  static float g_acc = 0.0f, f1_acc = 0.0f, f2_acc = 0.0f;
-
-  // Translate frequency potentiometer input to frequencies
-  // Lower frequency f1 range 50-1000 Hz
-  //float f1_in = 50.0f + 950.0f * (float)p_f1 / 1024.0f;
-  //f1_acc = 0.8f * f1_acc + 0.2f * f1_in;
-  //float f1 = f1_acc;
-  */
-
-  /*
-  // Upper frequency f2 range split in two halves 400-1000Hz and 1000-4000Hz
-  float f2_in = (float)p_f2 / 1024.0f;
-  if(f2_in < 0.5f) {
-    f2_in = 400.0f + 1200.0f * f2_in; // 0.0 < f2_in < 0.5
-  } else {
-    f2_in = -2000.0f + 6000.0f * f2_in; // 0.5 < f2_in < 1.0
-  }
-  f2_acc = 0.8f * f2_acc + 0.2f * f2_in;
-  float f2 = f2_acc;
-  */
-
-  /*
-  // Special CW mode if f2 < 1000
-  if(f2 < 1000.0f) {
-    // f2 is below 1000 Hz, fixed 100Hz bandwidth for CW
-    f1 = f2 - 100.0f;
-  }
-
-  // Handle gain input and activate it
-  float g_in = (float)p_gain;
-  g_acc = 0.8f * g_acc + 0.2f * g_in;
-
-  if(f2 < 1000.0f) {
-    // CW mode, compensate for low volume with +6dB
-    gain = (uint32_t)g_acc * 2.0f;
-  } else {
-    // Lowpass mode
-    gain = (uint32_t)g_acc;
-  }
-  */
-
-  // Since the POTs are not being used, this will not change and should be handled in the setup. Probably
-  // also don't need the double FIP tap buffer
-  // Get the FIR tap buffer not currently in use
-  //int32_t *new_fira = (fira == fir1a) ? fir2a : fir1a;
-  //int32_t *new_firb = (firb == fir1b) ? fir2b : fir1b;
-
-  // Run the generation and store in the spare buffer
-  //prepare_fir(new_fira, f1, f2);
-  //prepare_fir(new_firb, f2, f3);
-
-  // Make the new filter live. 32 bit volatile pointer writes and reads are assumed to be atomic!
-  //fira = new_fira;
-  //firb = new_firb;
 
   // Update DotStar RGB LED. The LED is used to show if we are
   // getting near saturation/clipping. Enabling the DotStar
