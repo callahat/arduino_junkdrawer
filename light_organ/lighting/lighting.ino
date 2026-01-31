@@ -30,7 +30,7 @@ Serial Light Organ
 //#define DEBUG_SERIAL1_READ
 //#define PLOTTER 1
 // blink the dotstar for every 800 bytes read
-#define MONITOR_SERIAL_READS 1
+//#define MONITOR_SERIAL_READS 1
 
 // pixel strip / light show config
 #define LED_PIN    0  // NeoPixel LED strand is connected to GPIO #0 / D0
@@ -330,31 +330,35 @@ void colorBand(int i, int sample, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 // Low Mid High Highest
-uint8_t bandLevels[4] = {3, 3, 2, 2};
-uint8_t pixelsPerLevel[4][3] = {
-    {4, 4, 6},
-    {3, 4, 6},
-    {4, 6, 0},
-    {4, 6, 0}
+uint8_t bandLevels[4] = {4, 4, 3, 3};
+uint8_t pixelsPerLevel[4][4] = {
+    {4, 4, 2, 4},
+    {3, 4, 2, 4},
+    {4, 2, 4, 0},
+    {4, 2, 4, 0}
   };
-uint8_t pixelMapping[4][3][6] = {
+uint8_t pixelMapping[4][4][6] = {
   { // low
-    {40, 44, 46, 42, 0, 0},        // level 1
-    {26, 27, 34, 35, 0, 0},        // level 2
-    {9, 10, 11, 21, 22, 23}  // level 3
+    {40, 44, 46, 42, 0, 0}, // level 1
+    {26, 27, 34, 35, 0, 0}, // level 2
+    {10, 22,  0 , 0, 0, 0}, // level 3
+    { 9, 11, 21, 23, 0, 0}  // level 4
   },
   { // mid
-    {41, 43, 45, 0, 0, 0},      // level 1
-    {24, 25, 32, 33, 0, 0}, // level 2
-    {0, 1, 2, 12, 13, 14} // level 3
+    {41, 43, 45,  0, 0, 0}, // level 1
+    {30, 31, 38, 39, 0, 0}, // level 2
+    { 4, 16,  0,  0, 0, 0}, // level 3
+    { 3,  5, 15, 17, 0, 0}  // level 4
   },
   { // high
-    {30, 31, 38, 39, 0, 0},     // level 1
-    {3, 4, 5, 15, 16, 17} // level 2
+    {24, 25, 32, 33, 0, 0}, // level 1
+    { 1, 13,  0,  0, 0, 0}, // level 2
+    { 0,  2, 12, 14, 0, 0}  // level 3
   },
   { // highest
-    {28, 29, 36, 37, 0, 0},     // level 1
-    {6, 7, 8, 18, 19, 20} // level 2
+    {28, 29, 36, 37, 0, 0}, // level 1
+    { 7, 19,  0,  0, 0, 0}, // level 2
+    { 6,  8, 18, 20, 0, 0}  // level 2
   }
 };
 int bLevels, lPixels;
