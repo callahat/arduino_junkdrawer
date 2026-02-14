@@ -83,7 +83,7 @@ only the mic pin is used. Analog output is also no longer used, nor is the gain.
 #define VERSION "1.3"
 
 // Uncomment to enable additional debug output on the virtual USB serial port
-#define PLOTTER 1
+// #define PLOTTER 1
 // #define MONITOR 1
 // #define MONITOR_SERIAL_DATA 1
 // #define DEBUG 1
@@ -151,22 +151,23 @@ volatile uint32_t s;
 volatile uint16_t  oa, ob, oc, od; // the clamped values will be between 0 and 1023, only need 2 bytes
 
 // Wait loop counters for ADC
-volatile uint32_t cnt; // , cnt2;
-
-// Signal level overdrive detection
-volatile uint32_t output_error_ticks = 65000;
-volatile uint32_t output_warning_ticks = 65000;
-#define OUTPUT_ERROR_LEVEL_HIGH 896
-#define OUTPUT_ERROR_LEVEL_LOW 128
-#define OUTPUT_WARNING_LEVEL_HIGH 768
-#define OUTPUT_WARNING_LEVEL_LOW 256
+volatile uint32_t cnt;
 
 // Some timing for debug messages
 #ifdef DEBUG
   volatile unsigned long timing = 0, last_timing = 0, interrupt_timing = 0;
 #endif
 
-#define MONITOR_SERIAL_WRITES 1
+/* 
+ * Blink the dotstar blue every cycles - works out to 800 bytes.
+ * Useful for seeing the update rate, and on the lighting how fast the reads
+ * are coming in. If this is set for both trinkets, the blink rate should be
+ * fairly close. Should blink every 1-2 seconds. Slow blinking may indicate the
+ * ADC is taking longer to get a good reading.
+ * Make sure these are off for normal operation as blinking the dotstar costs cyles,
+ * and can slow down the percieved refresh rates of the LEDs.
+ */
+// #define MONITOR_SERIAL_WRITES 1
 #ifdef MONITOR_SERIAL_WRITES
 int processedSerialCount = 0;
 bool processedSerialCountLightOn = false;
@@ -546,36 +547,6 @@ void sample_event()
   od = clamp_output(o2d);
   
   // The DAC will be updated at the start of the next interrupt to minimize jitter
-/*
- * The additional checks were slowing this function down way too much. Commenting this block out sped up the debug blue blink to about 1.5s
- * from ~4s blink for every 100 serial writes.
- * Also for this project, if we're hitting saturation on any band we'll be able to see it as that whole band should
- * light up on the LED strip
-  // Detect if we are near to clipping/overdrive
-  // The tick counters shows how long time ago we last had problems
-  if(oa > OUTPUT_ERROR_LEVEL_HIGH || oa < OUTPUT_ERROR_LEVEL_LOW ||
-     ob > OUTPUT_ERROR_LEVEL_HIGH || ob < OUTPUT_ERROR_LEVEL_LOW ||
-     oc > OUTPUT_ERROR_LEVEL_HIGH || oc < OUTPUT_ERROR_LEVEL_LOW ||
-     od > OUTPUT_ERROR_LEVEL_HIGH || od < OUTPUT_ERROR_LEVEL_LOW
-     ) {
-    output_error_ticks = 0;
-  } else {
-    output_error_ticks++;
-    if(output_error_ticks > 65000)
-      output_error_ticks = 65000;
-  }
-  if(oa > OUTPUT_WARNING_LEVEL_HIGH || oa < OUTPUT_WARNING_LEVEL_LOW ||
-     ob > OUTPUT_WARNING_LEVEL_HIGH || ob < OUTPUT_WARNING_LEVEL_LOW ||
-     oc > OUTPUT_WARNING_LEVEL_HIGH || oc < OUTPUT_WARNING_LEVEL_LOW ||
-     od > OUTPUT_WARNING_LEVEL_HIGH || od < OUTPUT_WARNING_LEVEL_LOW
-     ) {
-    output_warning_ticks = 0;
-  } else {
-    output_warning_ticks++;
-    if(output_warning_ticks > 65000)
-      output_warning_ticks = 65000;
-  }
-*/
 
   // Store the new input sample in the buffers
   // (must be done after the whole FIR is calculated)
@@ -681,27 +652,6 @@ void loop() {
   // Measure timing
   unsigned long loop_start_timer = micros();
   static unsigned long output_last_timer = 0;
-
-  // Update DotStar RGB LED. The LED is used to show if we are
-  // getting near saturation/clipping. Enabling the DotStar
-  // may create a small audible interference on the input sampling.
-  // It is most likely caused by the DotStar's built in PWM driver
-  // switching the LEDs on and off at about 400 Hz. The frequency
-  // seems to be affected by the temperature, so the interference
-  // is drifting around, and this is noticeable at high gain.
-  // Adjust the gain so that the LED is dark most of the time to
-  // get the best quality output audio.
-  if(output_error_ticks < 2000) {
-    // We have seen error conditions during the last 0.1s
-//    star.setPixelColor(0, 255, 0, 0);  // Angry red color on RGB LED
-  } else if(output_warning_ticks < 2000) {
-    // We have seen warning conditions during the last 0.1s
-//   star.setPixelColor(0, 191, 191, 0);  // Yellow color
-  } else {
-    // All ok, switch the LEDs off to avoid interference on the input
-  //  star.setPixelColor(0, 0, 0, 0);  // All off, dark means good signal
-  }
-  star.show();
 
   printFrequencyOverSerial(oa, ob, oc, od);
 
