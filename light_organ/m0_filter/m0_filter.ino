@@ -1,0 +1,776 @@
+/*
+--------------------------------------------------------------------------
+Copyright 2020, 2021 Magnus Öberg
+
+Permission to use, copy, modify, and/or distribute this software for
+any purpose with or without fee is hereby granted, provided that the
+above copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+--------------------------------------------------------------------------
+
+Trinket M0 parameterized filter
+===============================
+
+Written by SA5MOG Magnus Öberg (Moggen)
+
+The main idea of this program is to implement a parameterized bandpass
+filter using the Adafruit Trinket M0 module.
+
+The ATSAMD21E18 CPU does not have hardware support for floating point.
+This means that code using floating point will be (very) slow on this
+platform. Fixed point integer arithmetic needs to be used to get
+any reasonable calculation performance.
+
+The program is structured into a setup section (the standard Arduino
+"setup()" function) and two main loops running at the same time.
+One of the loops is running as a timer controlled interrupt service
+routine, and the other loop runs continously in the background (the
+standard Arduino "loop()")
+
+The timer loop is responsible for sampling the input, performing digital
+filtering and outputting the resulting signal again.
+The performance in this loop is critical, and the M0 CPU spends most of
+the time in this interrupt routine. Floating point code can not be used.
+The timer loop is actually sampling twice per loop. Once for the input
+sample, and once for one of the potentiometers (in a round-robin scheme)
+
+The background loop is continously running generation of new filter
+attributes based on the potentiometer samplings made by the timer
+loop. This loop is more relaxed, and a few float operations will be
+acceptable. But the response when adjusting the potentiometers will be
+sluggish if this loop is too slow, so some fixed point math is needed
+here as well.
+
+The sample rate was set to 20 kHz. This is perhaps suprisingly high
+as this filter typically operates with bandwidth up to 4 kHz.
+This was chosen to ease the complexity on a analog input filter.
+It only needs to suppress noise at 16 kHz and up.
+
+Pinout assumed on the Trinket MO:
+
+Pin 0 / A2 / (PA08) - Upper frequency potentiometer input
+Pin 1 / A0 / (PA02) - Analog output
+Pin 2 / A1 / (PA09) - Analog input
+Pin 3 / A3 / (PA07) - Gain potentiometer input
+Pin 4 / A4 / (PA06) - Lower frequency potentiometer input
+
+The range for all pins are GND to VDD (3.3V). Analog input protection
+diodes are highly recommended. Potentiomenters are typically linear 10kOhm
+
+Modifications: callahat
+
+Added 3 additional lookup tables to support 4 separate bandpass filters,
+which are read and data is written in two paired bytes to Serial1
+to be read by a different trinket that controls PWM RGB LEDs.
+The second trinket was needed as a trinket M0 can only support one
+interrupt that fires at precise intervals. The filter needs to sample
+precisely 20000 times a second, and the LED library also needs to use
+precise interrupt for timing the PWM. Attempting to run both on the same
+trinket causes the sampling and the LED control to become incorrect, with
+the bandpass filtering no longer working correctly.
+
+Also removed the use of potentiometers and the changing of the ADC source, as
+only the mic pin is used. Analog output is also no longer used, nor is the gain.
+*/
+
+#define VERSION "1.3"
+
+// Uncomment to enable additional debug output on the virtual USB serial port
+// #define PLOTTER 1
+// #define MONITOR 1
+// #define MONITOR_SERIAL_DATA 1
+// #define DEBUG 1
+
+#include <Adafruit_DotStar.h>
+// Init DotStar module
+Adafruit_DotStar star = Adafruit_DotStar(1, 7, 8, DOTSTAR_BGR);
+
+// Useful macros for syncing
+#define GCLK_SYNC() while(GCLK->STATUS.bit.SYNCBUSY){}
+#define TC5_SYNC() while(TC5->COUNT16.STATUS.bit.SYNCBUSY){}
+#define ADC_SYNC() while(ADC->STATUS.bit.SYNCBUSY){}
+
+// Main sample rate
+#define sampleRate 20000
+
+// This MUST match the baud rate in the lighting file
+//#define SERIAL_BAUD 250000
+#define SERIAL_BAUD 19200
+
+// after adding additional filters these seemed to need to double to reach the desired frequency
+//            Hz
+float f1 =    20;     // lowest
+float f2 =   240 * 2; // just below middle C ,top of octave 3
+float f3 =   800 * 2; // upper part of octave 5
+float f4 =  3600 * 2; // upper part of octave 7
+float f5 = 15000;     // top of octave 9
+
+// amplification for the bands, low to high
+#define ampa 80 // was 30
+#define ampb 80
+#define ampc 80
+#define ampd 80
+
+// The FIR length, optimized for the performance of the Trinket M0
+#define FIR_LEN 215
+
+// The table lengths are about half size. The FIR filters used in
+// this program are _always_ symmetrical so we only need one half.
+#define FIR_LEN_TABLE ((FIR_LEN>>1)+1)
+
+// The main sample buffer used for filtering.
+// It is actually two adjacent copies of a circular buffer.
+// This avoids wrapping checks in the inner loop.
+// The cost is an extra buffer write per sample and double amount of RAM
+int32_t samples[FIR_LEN*2];
+int next_idx;
+
+// Single buffering since they are calculate at startup
+int32_t fir1a[FIR_LEN_TABLE], fir1b[FIR_LEN_TABLE], fir1c[FIR_LEN_TABLE], fir1d[FIR_LEN_TABLE];
+
+// Communication between the timer loop and the background loop is done
+// through global data, and these are defined as volatile to avoid
+// problems with compiler optimizations
+
+// The current live buffer. Reads and writes to a volatile pointer are
+// assumed to be atomic!
+volatile int32_t *fira = fir1a;
+volatile int32_t *firb = fir1b;
+volatile int32_t *firc = fir1c;
+volatile int32_t *fird = fir1d;
+
+// Main working variables, current sample and current output
+volatile uint32_t s;
+volatile uint16_t  oa, ob, oc, od; // the clamped values will be between 0 and 1023, only need 2 bytes
+
+// Wait loop counters for ADC
+volatile uint32_t cnt;
+
+// Some timing for debug messages
+#ifdef DEBUG
+  volatile unsigned long timing = 0, last_timing = 0, interrupt_timing = 0;
+#endif
+
+/* 
+ * Blink the dotstar blue every cycles - works out to 800 bytes.
+ * Useful for seeing the update rate, and on the lighting how fast the reads
+ * are coming in. If this is set for both trinkets, the blink rate should be
+ * fairly close. Should blink every 1-2 seconds. Slow blinking may indicate the
+ * ADC is taking longer to get a good reading.
+ * Make sure these are off for normal operation as blinking the dotstar costs cyles,
+ * and can slow down the percieved refresh rates of the LEDs.
+ */
+// #define MONITOR_SERIAL_WRITES 1
+#ifdef MONITOR_SERIAL_WRITES
+int processedSerialCount = 0;
+bool processedSerialCountLightOn = false;
+#endif
+
+// Hamming window function using floating points.
+float hamming_float(float x) {
+  return 0.53836f - 0.46164f * cosf(2.0f * M_PI * x / (FIR_LEN-1));
+}
+
+// Fixed point LUT for the Hamming window.
+int16_t hamming_lut_S14[FIR_LEN_TABLE];
+
+// Lookup macro
+#define hamming_S14(i) (hamming_lut_S14[i])
+
+// Init of LUT (called once at setup)
+void prepare_hamming() {
+  for(int i=0; i<FIR_LEN_TABLE; i++)
+    hamming_lut_S14[i] = (int16_t)(hamming_float((float)i) * (float)(1<<14));
+}
+
+// Sinus with period=1.0 and divided by Pi, float version
+float sinP1dPi_float(float x) {
+  return sinf(x*2.0f*M_PI) / M_PI;
+}
+
+// Fixed point LUT. 512 entries for one period
+int16_t sinP1dPi_lut_S14[512];
+
+// Lookup function
+int16_t sinP1dPi_S14(int32_t x_S14) {
+  return sinP1dPi_lut_S14[(x_S14 & ((1<<14)-1)) >> 5];
+}
+
+// Init of LUT
+void prepare_sinus() {
+  for(int x = 0; x < 512; x++) {
+    sinP1dPi_lut_S14[x] = (int16_t)(sinP1dPi_float((float)x / 512.0f) * (float)(1<<14));
+  }
+}
+
+/*
+  The main FIR filter generation code.
+
+  The filter is directly generated from the two corner frequencies
+  defining the passband filter using SINC functions. There are lots
+  of methods of generating passband filters but this is a quite
+  simple one conceptually and has the benefit of zero phase distortion
+  (except for the group delay of FIR size / 2).
+
+  Using the output of the SINC function as the taps in a FIR filter
+  gives a perfect low pass filter (assuming infinite number of taps).
+  Subtracting another SINC output from this makes a perfect band pass
+  or band stop filter.
+
+  But we need to limit the amount of FIR taps obviously. We can simply
+  just cut off the ends to get the most important taps around the middle
+  (time=0). This will introduce artifacts in the spectrum, so called
+  side lobes. These can be suppressed with window functions like the
+  Hamming window.
+
+  The generated filter will of couse not be ideal and have transition
+  regions at the corner frequencies and some remaining side lobe
+  interference even if a window function is used. But it'll have to do.
+
+  This kind of FIR filter always comes with a fixed added delay of
+  half the number of taps in the filter.
+
+  In our case 215 taps -> 107 samples delay @20 kHz = 5.35 ms delay.
+  There will also be an additional delay of 2 samples because of
+  buffering in the timer loop of input and output values.
+
+  So the total delay should be around 109 samples = 5.45 ms
+
+  For some deep dive into the maths, see:
+  https://www.dsprelated.com/freebooks/sasp/FIR_Digital_Filter_Design.html
+
+  The SINC filter (also called brick wall filter) is explained here:
+  https://en.wikipedia.org/wiki/Sinc_filter
+
+  I've been using definitions and formulas from the Wikipedia article.
+  The lower start frequency is denoted as B and it is the digital
+  normalized frequency. This is the same as the frequency/sample rate.
+  B2 is the normalized upper stop frequency.
+
+  The normalized SINC function is defined as
+  SINC(x) = SIN(Pi * x) / (Pi * x)
+  x=0 is a special case and SINC(0) is defined as 1
+
+  The impulse response (FIR taps) for the ideal low pass filter with
+  corner frequency B is:
+  h(t) = 2*B * SINC(2*B*t)
+
+  This is the original non-optimized generation code:
+
+    float sinc(float x) {
+      if(x > -0.00001 && x < 0.00001)
+        return 1.0f;  // 1.0 by definition
+      return sinf(M_PI*x) / (M_PI*x);
+    }
+
+    void prepare_fir(int16_t *fir, int freq1, int freq2) {
+      float B = (float)freq1 / sampleRate;
+      float B2 = (float)freq2 / sampleRate;
+      for(int i=0; i < FIR_LEN; i++) {
+        float r = 2.0f * B2 * sinc((i - (FIR_LEN >> 1)) * 2.0f * B2);
+        r -= 2.0f * B * sinc((i - (FIR_LEN >> 1)) * 2.0f * B);
+        r *= hamming_float(i);
+        r *= 1 << 16;
+        fir[i] = (int16_t)r;
+      }
+    }
+
+  Below is the same calculation but heavily optimized.
+  The final FIR tap data is in fixed point integer format,
+  upshifted 16 bits. Only half of the taps are generated and
+  used as the tap values are symmetric around 0 (the midpoint).
+*/
+void prepare_fir(int32_t *fir, float freq1, float freq2) {
+  int32_t B_S14 = (int32_t)(freq1 * (float)(1 << 14) / sampleRate);
+  int32_t B2_S14 = (int32_t)(freq2 * (float)(1 << 14) / sampleRate);
+
+  int32_t B_cur = -(FIR_LEN >> 1);
+
+  int32_t B_cur2_S14 = -(FIR_LEN >> 1) * B_S14;
+  int32_t B2_cur2_S14 = -(FIR_LEN >> 1) * B2_S14;
+
+  int32_t r_S14, r_S16;
+  int i;
+  for(i=0; i<FIR_LEN_TABLE-1; i++) {
+    r_S14 = -sinP1dPi_S14(B_cur2_S14) + sinP1dPi_S14(B2_cur2_S14);
+    r_S16 = (r_S14 * hamming_S14(i) / B_cur) >> 12;
+    fir[i] = r_S16;
+    B_cur += 1;
+    B_cur2_S14 += B_S14;
+    B2_cur2_S14 += B2_S14;
+  }
+  // Last value, B_cur is 0 so we cant divide by it.
+  // This is the SINC(0) case and it is 1.0 by definition
+  r_S14 = (-B_S14 + B2_S14 ) << 1;   // (-B + B2) * 2
+  r_S16 = (r_S14 * hamming_S14(i)) >> 12;
+  fir[i] = r_S16;
+}
+
+// Init routine, run once after boot
+void setup() {
+#if defined(PLOTTER) || defined(MONITOR) || defined(DEBUG)
+  Serial.begin(9600);
+#endif
+  Serial1.begin(SERIAL_BAUD);
+  // Start by initialize the DotStar RGB and switch it off.
+  // The DotStar LED is causing a small interference on the ADC
+  // sampling, so we want to keep it off under normal operating
+  // conditions.
+  star.begin();
+  star.setBrightness(50);  // Adjust here if it is to bright or dull
+  star.setPixelColor(0, 0, 0, 0);  // Black = off
+  star.show();
+
+  // Init buffers
+  for(int i=0; i<FIR_LEN; i++) {
+    samples[i] = 0;
+    samples[i+FIR_LEN] = 0;
+    fir1a[i] = 0;
+    fir1b[i] = 0;
+    fir1c[i] = 0;
+    fir1d[i] = 0;
+  }
+  // Prepare lookup tables
+  prepare_hamming();
+  prepare_sinus();
+  
+  prepare_fir(fir1a, f1, f2);
+  prepare_fir(fir1b, f2, f3);
+  prepare_fir(fir1c, f3, f4);
+  prepare_fir(fir1d, f4, f5);
+  next_idx = 0;
+
+  // We use 10 bits for the DAC and ADC hardware
+  analogReadResolution(10);
+
+  // Dummy reads and writes to get all pin muxes and modes correctly set (by the Arduino libraries)
+  analogRead(A1);         // A1 / Pin 2 / PA09 as analog input of signal
+
+  // Switch off pin 13 LED
+  pinMode(13, OUTPUT);
+  digitalWrite(13, LOW);
+
+  // This part overrides ADC parameters manually. The Arduino environment has nice
+  // support for AD conversion, but it contains lots of checking code to make
+  // sure that pin modes are set etc. every time we sample. We do not need that
+  // and we also want to do some precise tuning.
+  ADC_SYNC();
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV32 |    // Divide the 48 MHz system clock by 32
+                   ADC_CTRLB_RESSEL_10BIT;        // 10 bits resolution
+
+  // Set sampling time length. This will determine the input impedance.
+  // See this excellent calculator (and her other posts):
+  // https://blog.thea.codes/getting-the-most-out-of-the-samd21-adc/
+
+  // Length 14 gives an impedance of about 155 kOhm and this will work
+  // great with 10 kOhm potentiometers.
+
+  // Length 14 also results in a total conversion time of 9.33 µs. This
+  // is fine as we have a time budget of 50 µs in the timer loop and
+  // we need to sample twice.
+  ADC->SAMPCTRL.reg = 14;
+  ADC_SYNC();
+  ADC->CTRLA.bit.ENABLE = 0x01;             // Enable ADC
+  ADC_SYNC();
+  ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;    // Clear the Data Ready flag
+  ADC_SYNC();
+
+  // Prepare to use A1 for sampling
+  ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[A1].ulADCChannelNumber;
+  ADC_SYNC();
+
+  // Prepare hardware timer TC5 to trigger at the sample rate
+  // Route GCLK0 (48MHz) to timers TC4 and TC5
+  GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5)) ;
+  GCLK_SYNC();
+
+  // Reset TC5
+  TC5->COUNT16.CTRLA.reg = TC_CTRLA_SWRST;
+  TC5_SYNC();
+
+  // Wait until reset is complete
+  while(TC5->COUNT16.CTRLA.bit.SWRST){};
+
+  // Configure TC5
+  TC5->COUNT16.CTRLA.reg =
+    TC_CTRLA_MODE_COUNT16 |    // 16 bit counter
+    TC_CTRLA_WAVEGEN_MFRQ |    // Match frequency mode
+    TC_CTRLA_PRESCALER_DIV1 |  // Prescaler 1 (giving 48MHz)
+    TC_CTRLA_ENABLE;           // Enable bit
+
+  // Set channel 0 compare value to match sample period (50µs)
+  TC5->COUNT16.CC[0].reg = (uint16_t) (SystemCoreClock / sampleRate - 1);
+
+  // Get in sync
+  TC5_SYNC();
+
+  // Configure interrupt settings for TC5
+  NVIC_DisableIRQ(TC5_IRQn);
+  NVIC_ClearPendingIRQ(TC5_IRQn);
+  NVIC_SetPriority(TC5_IRQn, 0);
+  NVIC_EnableIRQ(TC5_IRQn);
+
+  // Enable TC5 channel 0 match interrupt
+  TC5->COUNT16.INTENSET.bit.MC0 = 1;
+  TC5_SYNC();
+}
+
+// TC5 global interrupt handler. This callback function is automatically
+// set up by the Arduino environment as an interrupt service routine.
+// This function must be named exactly like this (do not change).
+void TC5_Handler (void)
+{
+  // Call our own function
+  sample_event();
+
+  // Must acknowledge the interrupt request for it to trigger again
+  TC5->COUNT16.INTFLAG.bit.MC0 = 1;
+}
+
+uint16_t clamp_output(int32_t o2)
+{
+  if(o2 < -511) {
+    return(0);
+  } else if(o2 > 511) {
+    return(1023);
+  } else {
+    return(o2 + 512);
+  }
+}
+
+// Main sample functions. Called in interrupt context once every sample period.
+void sample_event()
+{
+  // Keep track of timing for debugging purposes.
+  #ifdef DEBUG
+    unsigned long now_timing = micros();
+    timing = now_timing - last_timing;
+    last_timing = now_timing;
+  #endif
+
+  // Start by initiate a ADC operation immediately followed by DAC
+  // output of the calulated sample from the last event. This will
+  // minimize jitter on both ADC and DAC.
+
+  // The ADC source MUX is already configured for A1
+  // Start ADC conversion, it will run in the background
+  ADC->SWTRIG.bit.START = 1;
+
+  // Set the DAC output value calculated during the last interrupt.
+  // DAC->DATA.reg = o;
+
+  // Do FIR filtering calculations. This is split in to two parts.
+
+  // This loop utilizes that we have two identical copies of the sample
+  // circular buffer. There is always a continous block of valid data
+  // at the "next_idx" offset. We do not have to check for wrapping!
+  // This saves some precious cycles in this inner loop.
+
+  // These FIR filtering loops use the "fir" pointer directly. That is
+  // ok and perfectly safe as the background loop is paused during the
+  // interrupt service routine. Thus no risk of it being modified.
+
+  // This is the first half of FIR filtering:
+  int32_t acca = 0;
+  int32_t accb = 0;
+  int32_t accc = 0;
+  int32_t accd = 0;
+  int i=0, n=next_idx, n2=next_idx+FIR_LEN-1;
+  for(; i<(FIR_LEN>>2); i++, n++, n2--) {
+    // Convolution. Multiply and accumulate. Take advantage
+    // of the symmetry to do two values at the same time.
+    acca += (samples[n] + samples[n2]) * fira[i];
+    accb += (samples[n] + samples[n2]) * firb[i];
+    accc += (samples[n] + samples[n2]) * firc[i];
+    accd += (samples[n] + samples[n2]) * fird[i];
+  }
+
+  // The ADC should have had time to finish now. Do the follow up
+  cnt = 0;
+  while (ADC->INTFLAG.bit.RESRDY == 0) cnt++;   // Waiting for conversion to complete
+
+  // Get our sample!
+  s = ADC->RESULT.reg;
+  ADC->INTFLAG.reg = ADC_INTFLAG_RESRDY;  // Clear the Data Ready flag
+
+  // Start ADC conversion, it will run in the background
+  ADC->SWTRIG.bit.START = 1;
+
+  // Do more FIR filtering. The second half
+  for(; i<(FIR_LEN>>1); i++, n++, n2--) {
+    acca += (samples[n] + samples[n2]) * fira[i];
+    accb += (samples[n] + samples[n2]) * firb[i];
+    accc += (samples[n] + samples[n2]) * firc[i];
+    accd += (samples[n] + samples[n2]) * fird[i];
+  }
+
+  // The center tap is separately handled
+  acca += samples[n] * fira[i];
+  accb += samples[n] * firb[i];
+  accc += samples[n] * firc[i];
+  accd += samples[n] * fird[i];
+
+  // acc has a theoretical maximum value FIR_LEN * 512 * 65536, or 2^8 * 2^9 * 2^16 = 2^33
+  // but due to the FIR buffer properties, the maximum should become around 2 * 512 * 65536 = 2^26
+  // The gain is up to 2^10, so if the sum is shifted 6 steps giving maximum 2^20 we can
+  // safely multiply and stay inside 32 bits (31 signed bits)
+  acca >>= 6;
+  accb >>= 6;
+  accc >>= 6;
+  accd >>= 6;
+
+  // hardcode a gain since not using POT
+  acca *= ampa;
+  accb *= ampb;
+  accc *= ampc;
+  accd *= ampd;
+
+  // We have 4 bits to go to compensate for the gain, and 16 bit shift for the FIR table multiplier.
+  // But we want the gain to actually be able to amplify. If we skip shifting 5 steps, the max
+  // reading on the gain potentiometer results in 32 times volume.
+  int32_t o2a = acca >> (4 + 16 - 5);
+  int32_t o2b = accb >> (4 + 16 - 5);
+  int32_t o2c = accc >> (4 + 16 - 5);
+  int32_t o2d = accd >> (4 + 16 - 5);
+
+  // Clamping of the output
+  oa = clamp_output(o2a);
+  ob = clamp_output(o2b);
+  oc = clamp_output(o2c);
+  od = clamp_output(o2d);
+  
+  // The DAC will be updated at the start of the next interrupt to minimize jitter
+
+  // Store the new input sample in the buffers
+  // (must be done after the whole FIR is calculated)
+  int32_t s2 = s - 512;
+  samples[next_idx] = s2;
+  samples[next_idx+FIR_LEN] = s2;   // Mirrored copy.. but worth it!
+  next_idx++;
+  if(next_idx >= FIR_LEN)
+    next_idx = 0;
+
+  // The preset should be overkill as we don't change it. probably can comment it out.
+  // Pre-set MUX to A1 so that we can start sampling immediately at next interrupt
+  //ADC->INPUTCTRL.bit.MUXPOS = g_APinDescription[A1].ulADCChannelNumber;
+  //ADC_SYNC();
+  // The above also seemed to cause the ADC reads to slow a bit
+
+  // Keep track of timing for debugging purposes.
+  #ifdef DEBUG
+    now_timing = micros();
+    interrupt_timing = now_timing - last_timing;
+  #endif
+}
+
+#define FIRST_POSITION_BIT  1 << 7
+#define SECOND_POSITION_BIT 0 << 7
+#define LOW_BAND_BITS       0 << 5
+#define MID_BAND_BITS       1 << 5
+#define HIGH_BAND_BITS      2 << 5
+#define HIGHEST_BAND_BITS   3 << 5
+
+#define BYTE_BIT_MASK 31
+
+void printFrequencyOverSerial(uint16_t lowest_band, uint16_t mid_band, uint16_t high_band, uint16_t highest_band) {
+  /* 
+   * The bands themselves range from 0 to 1023, which means only 10 bits are needed for the power level, 
+   * leaving 6 bytes for other data. We can send two bytes for each band:
+   *   bit       description
+   *   7         1 - indicates this byte contains the upper 5 bits of the power
+   *             0 - indicates this byte contains the lower 5 bits of the power
+   *   6,5       The band number (zero indexed, 0 through 3)
+   *   4,3,2,1,0 The power level
+   */
+
+   // 31 is the mask for five bits, zero out anything higher
+   // write to write as a byte and not a human readable character
+   Serial1.write(FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK));
+
+   Serial1.write(FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK));
+   
+   Serial1.write(FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK));
+   
+   Serial1.write(FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK));
+   Serial1.write(SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK));
+
+    #ifdef MONITOR_SERIAL_DATA
+    // print to the debug serial window the binary of whats sent
+    Serial.println("BAND: lowest");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | LOW_BAND_BITS     | (lowest_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | LOW_BAND_BITS     | (lowest_band      & BYTE_BIT_MASK), BIN);
+
+    Serial.println("BAND: mid");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | MID_BAND_BITS     | (mid_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | MID_BAND_BITS     | (mid_band      & BYTE_BIT_MASK), BIN);
+   
+    Serial.println("BAND: high");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | HIGH_BAND_BITS    | (high_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | HIGH_BAND_BITS    | (high_band      & BYTE_BIT_MASK), BIN);
+
+    Serial.println("BAND: highest");
+    Serial.print("Write:");
+    Serial.println(256 | FIRST_POSITION_BIT  | HIGHEST_BAND_BITS | (highest_band >> 5 & BYTE_BIT_MASK), BIN);
+    Serial.print("Write:");
+    Serial.println(256 | SECOND_POSITION_BIT | HIGHEST_BAND_BITS | (highest_band      & BYTE_BIT_MASK), BIN);
+    #endif
+
+    #ifdef MONITOR_SERIAL_WRITES
+    processedSerialCount++;
+    if(processedSerialCount > 100) {
+      processedSerialCount = 0;
+      processedSerialCountLightOn = true;
+      star.setPixelColor(0, 0, 0, 255);
+      star.show();
+    } else if(processedSerialCountLightOn && processedSerialCount > 5) {
+      processedSerialCountLightOn = false;
+      star.setPixelColor(0, 0, 0, 0);
+      star.show();
+    }
+    #endif
+}
+
+// The background loop!
+void loop() {
+
+  // Measure timing
+  unsigned long loop_start_timer = micros();
+  static unsigned long output_last_timer = 0;
+
+  printFrequencyOverSerial(oa, ob, oc, od);
+
+  // More timing
+  unsigned long loop_end_timer = micros();
+
+  #ifdef PLOTTER
+  Serial.print(od+512);
+  Serial.print("\t");
+  Serial.print(oc+384);
+  Serial.print("\t");
+  Serial.print(ob+256);
+  Serial.print("\t");
+  Serial.print(oa+128);
+  Serial.print("\t");
+  Serial.print(s);
+  Serial.print("\t384\t1128");
+  Serial.print("\n");
+  #endif
+    
+  // Only print on virtual serial port every 0.5s
+  if(loop_start_timer > output_last_timer + 500000 ||
+     loop_start_timer < output_last_timer) {
+
+    output_last_timer = loop_start_timer;
+
+    #ifdef MONITOR
+    Serial.print("m0_filter v" VERSION ": gain=");
+    Serial.print("n/a");
+    //Serial.print(g_acc/32.0f);
+    Serial.print(", f1=");
+    Serial.print(f1);
+    Serial.print(", f2=");
+    Serial.print(f2);
+    Serial.print(", f3=");
+    Serial.print(f3);
+    Serial.print(", f4=");
+    Serial.print(f4);
+    Serial.print(", f5=");
+    Serial.print(f5);
+    Serial.print("\n");
+    #endif
+
+    #ifdef DEBUG
+    Serial.print("Interrupt separation time: ");
+    Serial.print(timing);
+    Serial.print(" us, duration: ");
+    Serial.print(interrupt_timing);
+    Serial.print(" us,  ADC wait count 1: ");
+    Serial.print(cnt);
+    //Serial.print(",  count 2: ");
+    //Serial.print(cnt2);
+    Serial.print("\n");
+
+    Serial.print("Sample: ");
+    Serial.print(s);
+    Serial.print("\n");
+    Serial.print("OutputA: ");
+    Serial.print(oa);
+    Serial.print("\n");
+    Serial.print("Outputb: ");
+    Serial.print(ob);
+    Serial.print("\n");
+    Serial.print("Outputc: ");
+    Serial.print(oc);
+    Serial.print("\n");
+    Serial.print("Outputd: ");
+    Serial.print(od);
+    Serial.print("\n");
+    /*
+    Serial.print("Potentiometers: Gain: ");
+    Serial.print(p_gain);
+    Serial.print(",  f1: ");
+    Serial.print(p_f1);
+    Serial.print(",  f2: ");
+    Serial.print(p_f2);
+    Serial.print("\n");
+    */
+
+    Serial.print("Calc. time: ");
+    Serial.print(loop_end_timer - loop_start_timer);
+    Serial.print(" us\n");
+
+    Serial.print("FIRA taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(fira[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+    
+    Serial.print("FIRB taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(firb[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+
+    Serial.print("FIRC taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(firc[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+    
+    Serial.print("FIRD taps:\n[");
+    for(int i=0; i<FIR_LEN_TABLE; i++) {
+      if(i%15 == 14)
+        Serial.print("\n");
+      Serial.print(fird[i]);
+      Serial.print(", ");
+    }
+    Serial.print("]\n");
+
+    #endif
+  }
+}
