@@ -10,6 +10,8 @@ I found most of these at a microcenter. They seemed to have normal prices. Other
 
 For the desktop sized ringed organ (as seen in action here https://www.youtube.com/watch?v=p-rRPTdcBIs). Make sure they are all RGB and not RGBW.
 
+![rings](media/rings.jpg){width=300}
+
 - [7 LED Jewel](https://www.microcenter.com/product/456218/NeoPixel_Jewel_-_7_x_WS2812_5050_RGB_LED_with_Integrated_Drivers)
 - [16 LED Ring](https://www.microcenter.com/product/655358/adafruit-industries-neopixel-ring-16-x-5050-rgb-led-with-integrated-drivers)
 - [24 LED Ring](https://www.microcenter.com/product/654831/adafruit-industries-neopixel-ring-24-x-5050-rgb-led-with-integrated-drivers)
