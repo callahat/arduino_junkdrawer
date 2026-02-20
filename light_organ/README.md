@@ -10,7 +10,7 @@ I found most of these at a microcenter. They seemed to have normal prices. Other
 
 For the desktop sized ringed organ (as seen in action here https://www.youtube.com/watch?v=p-rRPTdcBIs). Make sure they are all RGB and not RGBW.
 
-![rings](media/rings.jpg){width=300}
+<img src="https://raw.githubusercontent.com/callahat/arduino_junkdrawer/master/light_organ/media/rings.jpg" alt="Rings" width="300"/>
 
 - [7 LED Jewel](https://www.microcenter.com/product/456218/NeoPixel_Jewel_-_7_x_WS2812_5050_RGB_LED_with_Integrated_Drivers)
 - [16 LED Ring](https://www.microcenter.com/product/655358/adafruit-industries-neopixel-ring-16-x-5050-rgb-led-with-integrated-drivers)
@@ -34,11 +34,12 @@ Grounds are connected together in a star configuration (see wiring photos below)
 
 The USB pin is used to power the other trinket and LEDs when only one of the Trinkets has power coming in via the micro usb port. (Both trinkets can be connected via micro USB when writing the programs to them)
 
-![wiring](media/wiring.png){width=750}
 
-![front](media/front.jpg){width=600}
+<img src="https://raw.githubusercontent.com/callahat/arduino_junkdrawer/master/light_organ/media/wiring.png" alt="Wiring" width="750"/>
 
-![back](media/back.jpg){width=600}
+<img src="https://raw.githubusercontent.com/callahat/arduino_junkdrawer/master/light_organ/media/front.jpg" alt="Back" width="600"/>
+
+<img src="https://raw.githubusercontent.com/callahat/arduino_junkdrawer/master/light_organ/media/back.jpg" alt="From" width="600"/>
 
 When soldering, it was useful to have a multimeter handy to check connections.
 
