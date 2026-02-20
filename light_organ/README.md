@@ -86,3 +86,7 @@ Good reference for the PINs and what they can be used for.
 [Musical Notes](https://www.liutaiomottola.com/formulae/freqtab.htm)
 
 Used this when trying to determine what would be good boundary fequencies for the different four bands.
+
+[Arduino reference](https://docs.arduino.cc/language-reference/)
+
+
