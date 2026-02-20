@@ -38,6 +38,8 @@ The USB pin is used to power the other trinket and LEDs when only one of the Tri
 
 ![back](media/back.jpg){width=600}
 
+When soldering, it was useful to have a multimeter handy to check connections.
+
 ### Programs
 
 Arduino IDE v1.8.19 was used for code editing and writing the programs to the microcontrollers. You may need to add an additional board manager url to get the Trinket M0 to selectable as a Board from the Tools menu item.
@@ -45,6 +47,8 @@ Arduino IDE v1.8.19 was used for code editing and writing the programs to the mi
 `https://adafruit.github.io/arduino-board-index/package_adafruit_index.json`
 
 As per instructions in the m0_filter program, optimize for "Fastest"
+
+Make sure debugging LED's and serial writes are disabled for better performance.
 
 #### m0_filter
 
@@ -59,3 +63,26 @@ It also can be configured; two methods of lighting are present. The simplest lig
 The second method involves more planning but can be used for more interesting effects. This allows you to group numbered LEDs into groups for different levels of loudness for each filter range. It will require more planning and uses three arrays. An example of three rings using the mapping:  
 
 [![Trinket M0 Light Organ Demo](https://img.youtube.com/vi/p-rRPTdcBIs/0.jpg)](https://www.youtube.com/watch?v=p-rRPTdcBIs)
+
+
+### Other Links
+
+[Original m0 filter](https://github.com/moggen/m0_filter)
+
+Thanks to Magnus Öberg for this filter and having figured out how to use a trinket m0 for bandpass fitlering
+
+[Tone Generator](https://onlinetonegenerator.com/)
+
+Used this while testing the setup of the filter ranges and troubleshooting the coloring of LEDs for different levels.
+
+[Trinket Circuit Diagram](https://learn.adafruit.com/assets/45723)
+
+Used when trying to figure out why ADC reads were slowing down when connected to a battery vs USB port from a computer for power. Was interesting but didn't really find out why. Removing the code that reset the ADC pin seemed to fix the read speed.
+
+[Pinouts](https://learn.adafruit.com/adafruit-trinket-m0-circuitpython-arduino/pinouts)
+
+Good reference for the PINs and what they can be used for.
+
+[Musical Notes](https://www.liutaiomottola.com/formulae/freqtab.htm)
+
+Used this when trying to determine what would be good boundary fequencies for the different four bands.
